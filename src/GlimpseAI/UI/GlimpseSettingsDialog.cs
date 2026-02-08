@@ -3,28 +3,34 @@ using Eto.Drawing;
 using Eto.Forms;
 using Rhino;
 using GlimpseAI.Models;
+using GlimpseAI.Services;
 
 namespace GlimpseAI.UI;
 
 /// <summary>
 /// Modal settings dialog for Glimpse AI configuration.
+/// Allows users to configure ComfyUI URL, presets, auto-generate behavior, and more.
 /// </summary>
 public class GlimpseSettingsDialog : Dialog
 {
+    // --- Controls ---
     private TextBox _comfyUrlTextBox;
     private DropDown _presetDropDown;
     private CheckBox _autoGenerateCheckBox;
     private NumericStepper _debounceStepper;
-    private TextBox _defaultPromptTextBox;
+    private TextArea _defaultPromptTextArea;
     private NumericStepper _denoiseStepper;
     private NumericStepper _captureWidthStepper;
     private NumericStepper _captureHeightStepper;
+    private Button _testConnectionButton;
+    private Label _connectionStatusLabel;
 
     public GlimpseSettingsDialog()
     {
         Title = "Glimpse AI Settings";
-        MinimumSize = new Size(420, 480);
+        MinimumSize = new Size(450, 520);
         Resizable = true;
+        Padding = new Padding(0);
 
         Content = BuildUI();
         LoadCurrentSettings();
@@ -32,56 +38,141 @@ public class GlimpseSettingsDialog : Dialog
 
     private Control BuildUI()
     {
-        // ComfyUI URL
+        // --- ComfyUI Connection ---
         _comfyUrlTextBox = new TextBox();
 
-        // Default Preset
+        _testConnectionButton = new Button { Text = "Test Connection", Width = 120 };
+        _testConnectionButton.Click += OnTestConnectionClicked;
+
+        _connectionStatusLabel = new Label
+        {
+            Text = "",
+            TextColor = Colors.Gray,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var urlRow = new StackLayout
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Items =
+            {
+                new StackLayoutItem(_comfyUrlTextBox, expand: true),
+                _testConnectionButton,
+                _connectionStatusLabel
+            }
+        };
+
+        // --- Default Preset ---
         _presetDropDown = new DropDown();
         foreach (var preset in Enum.GetValues(typeof(PresetType)))
             _presetDropDown.Items.Add(preset.ToString());
 
-        // Auto Generate
+        // --- Auto Generate ---
         _autoGenerateCheckBox = new CheckBox { Text = "Auto-generate on viewport change" };
 
-        // Debounce
-        _debounceStepper = new NumericStepper { MinValue = 50, MaxValue = 2000, Increment = 50 };
+        // --- Debounce ---
+        _debounceStepper = new NumericStepper
+        {
+            MinValue = 100,
+            MaxValue = 2000,
+            Increment = 50,
+            DecimalPlaces = 0
+        };
 
-        // Default Prompt
-        _defaultPromptTextBox = new TextBox();
+        // --- Default Prompt ---
+        _defaultPromptTextArea = new TextArea
+        {
+            Height = 60,
+            Wrap = true,
+            SpellCheck = false
+        };
 
-        // Denoise Strength
-        _denoiseStepper = new NumericStepper { MinValue = 0.0, MaxValue = 1.0, Increment = 0.05, DecimalPlaces = 2 };
+        // --- Denoise Strength ---
+        _denoiseStepper = new NumericStepper
+        {
+            MinValue = 0.0,
+            MaxValue = 1.0,
+            Increment = 0.05,
+            DecimalPlaces = 2
+        };
 
-        // Capture dimensions
-        _captureWidthStepper = new NumericStepper { MinValue = 128, MaxValue = 2048, Increment = 64 };
-        _captureHeightStepper = new NumericStepper { MinValue = 128, MaxValue = 2048, Increment = 64 };
+        // --- Capture Resolution ---
+        _captureWidthStepper = new NumericStepper
+        {
+            MinValue = 128,
+            MaxValue = 2048,
+            Increment = 64,
+            DecimalPlaces = 0
+        };
+        _captureHeightStepper = new NumericStepper
+        {
+            MinValue = 128,
+            MaxValue = 2048,
+            Increment = 64,
+            DecimalPlaces = 0
+        };
 
-        // Buttons
-        var saveButton = new Button { Text = "Save" };
-        saveButton.Click += OnSaveClicked;
+        var resolutionRow = new StackLayout
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Items =
+            {
+                _captureWidthStepper,
+                new Label { Text = "×", VerticalAlignment = VerticalAlignment.Center },
+                _captureHeightStepper,
+                new Label { Text = "px", TextColor = Colors.Gray, VerticalAlignment = VerticalAlignment.Center }
+            }
+        };
+
+        // --- Buttons ---
+        var okButton = new Button { Text = "OK" };
+        okButton.Click += OnOkClicked;
 
         var cancelButton = new Button { Text = "Cancel" };
         cancelButton.Click += (s, e) => Close();
 
-        // Layout
-        var layout = new DynamicLayout { DefaultSpacing = new Size(8, 8), Padding = new Padding(16) };
+        DefaultButton = okButton;
+        AbortButton = cancelButton;
+
+        // --- Layout ---
+        var layout = new DynamicLayout
+        {
+            DefaultSpacing = new Size(8, 6),
+            Padding = new Padding(16)
+        };
 
         layout.BeginVertical();
-        layout.AddRow(new Label { Text = "ComfyUI URL:" });
-        layout.AddRow(_comfyUrlTextBox);
+
+        layout.AddRow(new Label { Text = "ComfyUI Server", Font = SystemFonts.Bold() });
+        layout.AddRow(new Label { Text = "URL:" });
+        layout.AddRow(urlRow);
+
+        layout.AddSpace();
+
+        layout.AddRow(new Label { Text = "Generation Defaults", Font = SystemFonts.Bold() });
         layout.AddRow(new Label { Text = "Default Preset:" });
         layout.AddRow(_presetDropDown);
+        layout.AddRow(new Label { Text = "Default Prompt:" });
+        layout.AddRow(_defaultPromptTextArea);
+        layout.AddRow(new Label { Text = "Denoise Strength:" });
+        layout.AddRow(_denoiseStepper);
+
+        layout.AddSpace();
+
+        layout.AddRow(new Label { Text = "Viewport Watcher", Font = SystemFonts.Bold() });
         layout.AddRow(_autoGenerateCheckBox);
         layout.AddRow(new Label { Text = "Debounce (ms):" });
         layout.AddRow(_debounceStepper);
-        layout.AddRow(new Label { Text = "Default Prompt:" });
-        layout.AddRow(_defaultPromptTextBox);
-        layout.AddRow(new Label { Text = "Denoise Strength:" });
-        layout.AddRow(_denoiseStepper);
-        layout.AddRow(new Label { Text = "Capture Width:" });
-        layout.AddRow(_captureWidthStepper);
-        layout.AddRow(new Label { Text = "Capture Height:" });
-        layout.AddRow(_captureHeightStepper);
+
+        layout.AddSpace();
+
+        layout.AddRow(new Label { Text = "Capture Resolution", Font = SystemFonts.Bold() });
+        layout.AddRow(resolutionRow);
+
         layout.EndVertical();
 
         layout.Add(null); // spacer
@@ -90,36 +181,83 @@ public class GlimpseSettingsDialog : Dialog
         layout.BeginHorizontal();
         layout.Add(null, xscale: true);
         layout.Add(cancelButton);
-        layout.Add(saveButton);
+        layout.Add(okButton);
         layout.EndHorizontal();
         layout.EndVertical();
 
         return layout;
     }
 
+    /// <summary>
+    /// Loads the current plugin settings into the dialog controls.
+    /// </summary>
     private void LoadCurrentSettings()
     {
         var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
 
         _comfyUrlTextBox.Text = settings.ComfyUIUrl;
-        _presetDropDown.SelectedIndex = (int)settings.DefaultPreset;
-        _autoGenerateCheckBox.Checked = settings.AutoGenerateEnabled;
+        _presetDropDown.SelectedIndex = (int)settings.ActivePreset;
+        _autoGenerateCheckBox.Checked = settings.AutoGenerate;
         _debounceStepper.Value = settings.DebounceMs;
-        _defaultPromptTextBox.Text = settings.DefaultPrompt;
+        _defaultPromptTextArea.Text = settings.DefaultPrompt;
         _denoiseStepper.Value = settings.DenoiseStrength;
         _captureWidthStepper.Value = settings.CaptureWidth;
         _captureHeightStepper.Value = settings.CaptureHeight;
     }
 
-    private void OnSaveClicked(object sender, EventArgs e)
+    /// <summary>
+    /// Tests the ComfyUI connection and updates the status label.
+    /// </summary>
+    private void OnTestConnectionClicked(object sender, EventArgs e)
+    {
+        _testConnectionButton.Enabled = false;
+        _connectionStatusLabel.Text = "Testing...";
+        _connectionStatusLabel.TextColor = Colors.Gray;
+
+        var url = _comfyUrlTextBox.Text;
+
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            bool ok;
+            try
+            {
+                using var client = new ComfyUIClient(url);
+                ok = await client.IsAvailableAsync();
+            }
+            catch
+            {
+                ok = false;
+            }
+
+            Application.Instance.Invoke(() =>
+            {
+                if (ok)
+                {
+                    _connectionStatusLabel.Text = "🟢 Connected";
+                    _connectionStatusLabel.TextColor = Color.FromArgb(80, 180, 80);
+                }
+                else
+                {
+                    _connectionStatusLabel.Text = "🔴 Unreachable";
+                    _connectionStatusLabel.TextColor = Color.FromArgb(220, 60, 60);
+                }
+                _testConnectionButton.Enabled = true;
+            });
+        });
+    }
+
+    /// <summary>
+    /// Saves settings and closes the dialog.
+    /// </summary>
+    private void OnOkClicked(object sender, EventArgs e)
     {
         var settings = new GlimpseSettings
         {
             ComfyUIUrl = _comfyUrlTextBox.Text,
-            DefaultPreset = (PresetType)_presetDropDown.SelectedIndex,
-            AutoGenerateEnabled = _autoGenerateCheckBox.Checked ?? true,
+            ActivePreset = (PresetType)_presetDropDown.SelectedIndex,
+            AutoGenerate = _autoGenerateCheckBox.Checked ?? false,
             DebounceMs = (int)_debounceStepper.Value,
-            DefaultPrompt = _defaultPromptTextBox.Text,
+            DefaultPrompt = _defaultPromptTextArea.Text,
             DenoiseStrength = _denoiseStepper.Value,
             CaptureWidth = (int)_captureWidthStepper.Value,
             CaptureHeight = (int)_captureHeightStepper.Value

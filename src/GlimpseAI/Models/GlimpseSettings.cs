@@ -28,6 +28,12 @@ public class GlimpseSettings
     /// <summary>Debounce delay in milliseconds for viewport change detection.</summary>
     public int DebounceMs { get; set; } = 300;
 
+    /// <summary>Viewport capture width in pixels.</summary>
+    public int CaptureWidth { get; set; } = 512;
+
+    /// <summary>Viewport capture height in pixels.</summary>
+    public int CaptureHeight { get; set; } = 384;
+
     /// <summary>Serialize to JSON string.</summary>
     public string ToJson()
     {
