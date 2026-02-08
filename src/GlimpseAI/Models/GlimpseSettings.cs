@@ -11,7 +11,7 @@ public class GlimpseSettings
     public string ComfyUIUrl { get; set; } = "http://localhost:8188";
 
     /// <summary>Default positive prompt.</summary>
-    public string DefaultPrompt { get; set; } = "modern architecture, photorealistic, natural lighting, 8k uhd";
+    public string DefaultPrompt { get; set; } = "photorealistic architectural rendering, realistic materials and textures, wood, concrete, glass, metal, natural lighting, warm colors, 8k uhd";
 
     /// <summary>Default negative prompt.</summary>
     public string DefaultNegativePrompt { get; set; } = "blurry, low quality, distorted, ugly, cartoon, sketch";
@@ -20,7 +20,7 @@ public class GlimpseSettings
     public PresetType ActivePreset { get; set; } = PresetType.Balanced;
 
     /// <summary>Denoise strength (0.0–1.0).</summary>
-    public double DenoiseStrength { get; set; } = 0.65;
+    public double DenoiseStrength { get; set; } = 0.75;
 
     /// <summary>Whether auto-generate on viewport change is enabled.</summary>
     public bool AutoGenerate { get; set; } = false;

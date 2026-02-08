@@ -194,32 +194,49 @@ public class ComfyUIClient : IDisposable
 
     /// <summary>
     /// Extracts the output image info from a completed prompt's history.
+    /// Retries several times because the history may not be immediately available
+    /// after WebSocket signals completion.
     /// </summary>
     private async Task<(string filename, string subfolder)?> GetOutputImageInfoAsync(string promptId)
     {
-        var response = await _client.GetAsync($"/history/{promptId}");
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync();
-        var root = JsonNode.Parse(json);
-
-        if (root is not JsonObject obj || !obj.ContainsKey(promptId))
-            return null;
-
-        var outputs = root[promptId]?["outputs"];
-        if (outputs is not JsonObject outputNodes)
-            return null;
-
-        foreach (var kvp in outputNodes)
+        // Retry up to 10 times with 300ms delay — history may lag behind WebSocket
+        for (int attempt = 0; attempt < 10; attempt++)
         {
-            var images = kvp.Value?["images"];
-            if (images is JsonArray arr && arr.Count > 0)
+            if (attempt > 0)
+                await Task.Delay(300);
+
+            try
             {
-                var firstImage = arr[0];
-                var filename = firstImage?["filename"]?.GetValue<string>();
-                var subfolder = firstImage?["subfolder"]?.GetValue<string>() ?? "";
-                if (filename != null)
-                    return (filename, subfolder);
+                var response = await _client.GetAsync($"/history/{promptId}");
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var json = await response.Content.ReadAsStringAsync();
+                var root = JsonNode.Parse(json);
+
+                if (root is not JsonObject obj || !obj.ContainsKey(promptId))
+                    continue;
+
+                var outputs = root[promptId]?["outputs"];
+                if (outputs is not JsonObject outputNodes || outputNodes.Count == 0)
+                    continue;
+
+                foreach (var kvp in outputNodes)
+                {
+                    var images = kvp.Value?["images"];
+                    if (images is JsonArray arr && arr.Count > 0)
+                    {
+                        var firstImage = arr[0];
+                        var filename = firstImage?["filename"]?.GetValue<string>();
+                        var subfolder = firstImage?["subfolder"]?.GetValue<string>() ?? "";
+                        if (filename != null)
+                            return (filename, subfolder);
+                    }
+                }
+            }
+            catch
+            {
+                // Retry on any error
             }
         }
 
@@ -466,22 +483,25 @@ public class ComfyUIClient : IDisposable
                     break;
 
                 case "executing":
-                    var node = data?["node"];
                     var msgPromptId = data?["prompt_id"]?.GetValue<string>();
-                    // node == null means execution finished for this prompt
-                    if (node == null && msgPromptId == promptId)
+                    if (msgPromptId != promptId) break;
+
+                    // Check if node is null (JSON null = execution finished)
+                    // data["node"] returns C# null for JSON null, but we also need
+                    // to handle it being a JsonValue containing null
+                    var nodeToken = data?["node"];
+                    bool nodeIsNull = nodeToken == null ||
+                        (nodeToken is JsonValue jv && jv.GetValueKind() == System.Text.Json.JsonValueKind.Null);
+
+                    if (nodeIsNull)
                     {
+                        Rhino.RhinoApp.WriteLine($"Glimpse AI: WS execution complete for {promptId}");
                         completed = true;
                     }
                     break;
 
-                case "executed":
-                    var execPromptId = data?["prompt_id"]?.GetValue<string>();
-                    if (execPromptId == promptId)
-                    {
-                        completed = true;
-                    }
-                    break;
+                // "executed" fires per-node — don't treat as completion
+                // Only "executing {node: null}" signals full prompt completion
 
                 case "execution_error":
                     var errPromptId = data?["prompt_id"]?.GetValue<string>();
