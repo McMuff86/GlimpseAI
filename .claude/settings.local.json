@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(dotnet build:*)",
+      "Bash(git config:*)",
+      "Bash(gh api:*)",
+      "WebSearch",
+      "WebFetch(domain:developer.rhino3d.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:discourse.mcneel.com)",
+      "WebFetch(domain:mcneel.github.io)"
+    ]
+  }
+}

@@ -113,7 +113,7 @@ public static class ViewportCapture
         return preset switch
         {
             Models.PresetType.Fast => (512, 384),
-            Models.PresetType.Balanced => (768, 576),
+            Models.PresetType.Balanced => (1024, 768),
             Models.PresetType.HighQuality => (1024, 768),
             Models.PresetType.Export4K => (1024, 768), // Upscaled to 4K by ComfyUI
             _ => (512, 384)

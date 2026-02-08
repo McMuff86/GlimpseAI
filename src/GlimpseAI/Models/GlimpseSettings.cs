@@ -17,7 +17,7 @@ public class GlimpseSettings
     public string DefaultNegativePrompt { get; set; } = "blurry, low quality, distorted, ugly, cartoon, sketch";
 
     /// <summary>Active quality preset.</summary>
-    public PresetType ActivePreset { get; set; } = PresetType.Fast;
+    public PresetType ActivePreset { get; set; } = PresetType.Balanced;
 
     /// <summary>Denoise strength (0.0–1.0).</summary>
     public double DenoiseStrength { get; set; } = 0.65;

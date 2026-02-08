@@ -33,6 +33,15 @@ public class GlimpsePanel : Panel, IPanel
     private Label _denoiseValueLabel;
     private TextBox _seedTextBox;
 
+    // Overlay controls
+    private Button _overlayToggleButton;
+    private Slider _opacitySlider;
+    private Label _opacityValueLabel;
+
+    // Progress display
+    private ProgressBar _progressBar;
+    private Label _progressLabel;
+
     // Buttons row
     private Button _generateButton;
     private Button _autoToggleButton;
@@ -47,6 +56,7 @@ public class GlimpsePanel : Panel, IPanel
     // --- State ---
     private GlimpseOrchestrator _orchestrator;
     private bool _autoModeActive;
+    private bool _overlayActive;
     private Bitmap _currentPreviewBitmap;
 
     /// <summary>
@@ -78,8 +88,10 @@ public class GlimpsePanel : Panel, IPanel
         };
 
         layout.Add(BuildPreviewArea(), yscale: true);
+        layout.Add(BuildProgressRow());
         layout.Add(BuildPromptArea());
         layout.Add(BuildControlsRow());
+        layout.Add(BuildOverlayRow());
         layout.Add(BuildButtonsRow());
         layout.Add(BuildStatusBar());
 
@@ -109,6 +121,40 @@ public class GlimpsePanel : Panel, IPanel
         };
 
         return _previewContainer;
+    }
+
+    /// <summary>
+    /// Builds the progress row showing sampling step and progress bar.
+    /// </summary>
+    private Control BuildProgressRow()
+    {
+        _progressLabel = new Label
+        {
+            Text = "",
+            TextColor = Colors.Gray,
+            Font = SystemFonts.Default(8)
+        };
+
+        _progressBar = new ProgressBar
+        {
+            MinValue = 0,
+            MaxValue = 100,
+            Value = 0
+        };
+
+        var layout = new StackLayout
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Items =
+            {
+                _progressLabel,
+                new StackLayoutItem(_progressBar, expand: true)
+            }
+        };
+
+        return layout;
     }
 
     /// <summary>
@@ -195,17 +241,59 @@ public class GlimpsePanel : Panel, IPanel
     }
 
     /// <summary>
+    /// Builds the overlay controls row: Toggle button and opacity slider.
+    /// </summary>
+    private Control BuildOverlayRow()
+    {
+        _overlayToggleButton = new Button { Text = "Overlay: Off" };
+        _overlayToggleButton.Click += OnOverlayToggleClicked;
+
+        _opacitySlider = new Slider
+        {
+            MinValue = 0,
+            MaxValue = 100,
+            Value = 85,
+            Width = 100,
+            Enabled = false
+        };
+        _opacitySlider.ValueChanged += OnOpacityChanged;
+
+        _opacityValueLabel = new Label
+        {
+            Text = "85%",
+            Width = 36,
+            TextColor = Colors.Gray
+        };
+
+        var layout = new StackLayout
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Items =
+            {
+                _overlayToggleButton,
+                new Label { Text = "Opacity:" },
+                _opacitySlider,
+                _opacityValueLabel
+            }
+        };
+
+        return layout;
+    }
+
+    /// <summary>
     /// Builds the buttons row: Generate, Auto toggle, Save.
     /// </summary>
     private Control BuildButtonsRow()
     {
-        _generateButton = new Button { Text = "▶ Generate" };
+        _generateButton = new Button { Text = "Generate" };
         _generateButton.Click += OnGenerateClicked;
 
-        _autoToggleButton = new Button { Text = "▶ Auto" };
+        _autoToggleButton = new Button { Text = "Auto" };
         _autoToggleButton.Click += OnAutoToggleClicked;
 
-        _saveButton = new Button { Text = "💾 Save", Enabled = false };
+        _saveButton = new Button { Text = "Save", Enabled = false };
         _saveButton.Click += OnSaveClicked;
 
         var layout = new StackLayout
@@ -248,7 +336,7 @@ public class GlimpsePanel : Panel, IPanel
         };
         _connectionStatusLabel = new Label
         {
-            Text = "⏳",
+            Text = "...",
             Font = SystemFonts.Default(8)
         };
 
@@ -285,6 +373,8 @@ public class GlimpsePanel : Panel, IPanel
         _orchestrator.RenderCompleted += OnRenderCompleted;
         _orchestrator.StatusChanged += OnStatusChanged;
         _orchestrator.BusyChanged += OnBusyChanged;
+        _orchestrator.ProgressChanged += OnProgressChanged;
+        _orchestrator.PreviewImageReceived += OnPreviewImageReceived;
     }
 
     /// <summary>
@@ -294,16 +384,19 @@ public class GlimpsePanel : Panel, IPanel
     {
         Application.Instance.Invoke(() =>
         {
+            // Reset progress
+            _progressBar.Value = 0;
+            _progressLabel.Text = "";
+
             if (result.Success && result.ImageData != null)
             {
                 ShowPreviewImage(result.ImageData);
                 _generationTimeLabel.Text = $"{result.Elapsed.TotalSeconds:F1}s";
                 _saveButton.Enabled = true;
 
-                // Show image dimensions
                 if (_currentPreviewBitmap != null)
                 {
-                    _resolutionLabel.Text = $"{_currentPreviewBitmap.Width}×{_currentPreviewBitmap.Height}";
+                    _resolutionLabel.Text = $"{_currentPreviewBitmap.Width}x{_currentPreviewBitmap.Height}";
                 }
 
                 _modelNameLabel.Text = result.Preset.ToString();
@@ -338,6 +431,39 @@ public class GlimpsePanel : Panel, IPanel
             _presetDropDown.Enabled = !busy;
             _denoiseSlider.Enabled = !busy;
             _seedTextBox.Enabled = !busy;
+
+            if (busy)
+            {
+                _progressBar.Value = 0;
+                _progressLabel.Text = "Generating...";
+            }
+        });
+    }
+
+    /// <summary>
+    /// Called when ComfyUI reports sampling progress. Marshals to UI.
+    /// </summary>
+    private void OnProgressChanged(object sender, ProgressEventArgs e)
+    {
+        Application.Instance.Invoke(() =>
+        {
+            if (e.TotalSteps > 0)
+            {
+                _progressBar.MaxValue = e.TotalSteps;
+                _progressBar.Value = Math.Min(e.Step, e.TotalSteps);
+                _progressLabel.Text = $"Step {e.Step}/{e.TotalSteps}";
+            }
+        });
+    }
+
+    /// <summary>
+    /// Called when a latent preview image is received. Shows it in the preview area.
+    /// </summary>
+    private void OnPreviewImageReceived(object sender, PreviewImageEventArgs e)
+    {
+        Application.Instance.Invoke(() =>
+        {
+            ShowPreviewImage(e.ImageData);
         });
     }
 
@@ -398,7 +524,7 @@ public class GlimpsePanel : Panel, IPanel
 
         if (_autoModeActive)
         {
-            _autoToggleButton.Text = "⏸ Auto";
+            _autoToggleButton.Text = "Stop Auto";
             _orchestrator.StartAutoMode(
                 _promptTextArea.Text,
                 (PresetType)_presetDropDown.SelectedIndex,
@@ -407,16 +533,41 @@ public class GlimpsePanel : Panel, IPanel
         }
         else
         {
-            _autoToggleButton.Text = "▶ Auto";
+            _autoToggleButton.Text = "Auto";
             _orchestrator.StopAutoMode();
         }
+    }
+
+    private void OnOverlayToggleClicked(object sender, EventArgs e)
+    {
+        _overlayActive = !_overlayActive;
+
+        if (_overlayActive)
+        {
+            _overlayToggleButton.Text = "Overlay: On";
+            _opacitySlider.Enabled = true;
+            _orchestrator.SetOverlayEnabled(true);
+        }
+        else
+        {
+            _overlayToggleButton.Text = "Overlay: Off";
+            _opacitySlider.Enabled = false;
+            _orchestrator.SetOverlayEnabled(false);
+        }
+    }
+
+    private void OnOpacityChanged(object sender, EventArgs e)
+    {
+        var opacity = _opacitySlider.Value / 100.0;
+        _opacityValueLabel.Text = $"{_opacitySlider.Value}%";
+        _orchestrator.SetOverlayOpacity(opacity);
     }
 
     private void OnSaveClicked(object sender, EventArgs e)
     {
         if (_currentPreviewBitmap == null) return;
 
-        var dialog = new SaveFileDialog
+        var dialog = new Eto.Forms.SaveFileDialog
         {
             Title = "Save AI Preview",
             Filters = { new FileFilter("PNG Image", ".png") }
@@ -443,7 +594,6 @@ public class GlimpsePanel : Panel, IPanel
         settings.ActivePreset = preset;
         GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
 
-        // If auto mode is active, update the orchestrator
         if (_autoModeActive)
         {
             _orchestrator.UpdateAutoSettings(
@@ -485,7 +635,6 @@ public class GlimpsePanel : Panel, IPanel
 
     public void PanelHidden(uint documentSerialNumber, ShowPanelReason reason)
     {
-        // Pause auto mode when hidden to save resources
         if (_autoModeActive)
         {
             _orchestrator.StopAutoMode();
@@ -532,14 +681,15 @@ public class GlimpsePanel : Panel, IPanel
     /// </summary>
     private void CheckComfyUIConnection()
     {
-        _connectionStatusLabel.Text = "⏳";
+        _connectionStatusLabel.Text = "...";
 
         System.Threading.Tasks.Task.Run(async () =>
         {
             var available = await _orchestrator.CheckConnectionAsync();
             Application.Instance.Invoke(() =>
             {
-                _connectionStatusLabel.Text = available ? "🟢 ComfyUI" : "🔴 ComfyUI";
+                _connectionStatusLabel.Text = available ? "ComfyUI OK" : "ComfyUI offline";
+                _connectionStatusLabel.TextColor = available ? Colors.Green : Colors.Red;
             });
         });
     }

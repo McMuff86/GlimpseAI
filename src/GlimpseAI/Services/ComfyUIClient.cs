@@ -1,8 +1,10 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,34 +15,43 @@ using GlimpseAI.Models;
 namespace GlimpseAI.Services;
 
 /// <summary>
-/// HTTP client for the ComfyUI API.
-/// Handles image upload, workflow queueing, polling, and result download.
+/// Client for the ComfyUI API using HTTP for uploads/queueing and WebSocket for
+/// real-time progress, latent previews, and completion detection.
 /// </summary>
 public class ComfyUIClient : IDisposable
 {
     private readonly HttpClient _client;
     private readonly string _baseUrl;
+    private readonly string _clientId;
+    private ClientWebSocket _ws;
     private bool _disposed;
 
-    /// <summary>
-    /// Polling interval in milliseconds when waiting for prompt completion.
-    /// </summary>
-    private const int PollIntervalMs = 150;
-
-    /// <summary>
-    /// Maximum time to wait for a single generation before timing out.
-    /// </summary>
+    /// <summary>Maximum time to wait for a single generation before timing out.</summary>
     private static readonly TimeSpan MaxWaitTime = TimeSpan.FromMinutes(5);
+
+    /// <summary>Raised when ComfyUI reports sampling progress (step/totalSteps).</summary>
+    public event EventHandler<ProgressEventArgs> ProgressChanged;
+
+    /// <summary>Raised when a latent preview image is received via WebSocket.</summary>
+    public event EventHandler<PreviewImageEventArgs> PreviewImageReceived;
 
     public ComfyUIClient(string baseUrl = "http://localhost:8188")
     {
         _baseUrl = baseUrl.TrimEnd('/');
+        _clientId = Guid.NewGuid().ToString("N");
         _client = new HttpClient
         {
             BaseAddress = new Uri(_baseUrl),
             Timeout = TimeSpan.FromMinutes(5)
         };
     }
+
+    /// <summary>
+    /// The unique client ID used for WebSocket subscription.
+    /// </summary>
+    public string ClientId => _clientId;
+
+    #region HTTP API Methods
 
     /// <summary>
     /// Checks whether the ComfyUI server is reachable and responding.
@@ -59,19 +70,74 @@ public class ComfyUIClient : IDisposable
     }
 
     /// <summary>
+    /// Queries ComfyUI for available checkpoint models.
+    /// </summary>
+    public async Task<List<string>> GetAvailableCheckpointsAsync()
+    {
+        try
+        {
+            var response = await _client.GetAsync("/object_info/CheckpointLoaderSimple");
+            if (!response.IsSuccessStatusCode)
+                return new List<string>();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var root = JsonNode.Parse(json);
+
+            var ckptNames = root?["CheckpointLoaderSimple"]?["input"]?["required"]?["ckpt_name"];
+            if (ckptNames is JsonArray outerArr && outerArr.Count > 0 && outerArr[0] is JsonArray namesArr)
+            {
+                return namesArr
+                    .Select(n => n?.GetValue<string>())
+                    .Where(n => n != null)
+                    .ToList();
+            }
+
+            return new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Finds the best available checkpoint for the given preset.
+    /// </summary>
+    public async Task<string> GetCheckpointForPresetAsync(PresetType preset)
+    {
+        var available = await GetAvailableCheckpointsAsync();
+        if (available.Count == 0)
+            return null;
+
+        var preferred = preset switch
+        {
+            PresetType.Fast => new[] { "dreamshaperXL_turboDPMSDE", "dreamshaper", "realvis", "juggernaut", "sd_xl" },
+            PresetType.Balanced => new[] { "juggernautXL", "juggernaut", "realvis", "dreamshaper", "sd_xl" },
+            PresetType.HighQuality => new[] { "dvarch", "juggernautXL", "realvis", "sd_xl" },
+            PresetType.Export4K => new[] { "dvarch", "juggernautXL", "realvis", "sd_xl" },
+            _ => new[] { "sd_xl", "dreamshaper", "juggernaut" }
+        };
+
+        foreach (var pref in preferred)
+        {
+            var match = available.FirstOrDefault(a =>
+                a.Contains(pref, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+                return match;
+        }
+
+        return available[0];
+    }
+
+    /// <summary>
     /// Uploads an image to the ComfyUI input folder.
     /// </summary>
-    /// <param name="imageData">PNG image bytes.</param>
-    /// <param name="filename">Desired filename (e.g. "viewport_capture.png").</param>
-    /// <returns>The server-assigned filename.</returns>
     public async Task<string> UploadImageAsync(byte[] imageData, string filename)
     {
         using var content = new MultipartFormDataContent();
         var imageContent = new ByteArrayContent(imageData);
         imageContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
         content.Add(imageContent, "image", filename);
-        // Upload to input subfolder
-        content.Add(new StringContent("input"), "subfolder");
         content.Add(new StringContent("true"), "overwrite");
 
         var response = await _client.PostAsync("/upload/image", content);
@@ -84,22 +150,27 @@ public class ComfyUIClient : IDisposable
     }
 
     /// <summary>
-    /// Queues a workflow prompt for execution.
+    /// Queues a workflow prompt for execution, including the client ID for WebSocket routing.
     /// </summary>
-    /// <param name="workflow">The workflow dictionary (node graph).</param>
-    /// <returns>The prompt ID for tracking.</returns>
     public async Task<string> QueuePromptAsync(Dictionary<string, object> workflow)
     {
         var payload = new Dictionary<string, object>
         {
-            ["prompt"] = workflow
+            ["prompt"] = workflow,
+            ["client_id"] = _clientId
         };
 
         var jsonContent = JsonSerializer.Serialize(payload);
         var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
         var response = await _client.PostAsync("/prompt", httpContent);
-        response.EnsureSuccessStatusCode();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync();
+            throw new InvalidOperationException(
+                $"ComfyUI rejected the prompt ({response.StatusCode}): {errorBody}");
+        }
 
         var responseJson = await response.Content.ReadAsStringAsync();
         var node = JsonNode.Parse(responseJson);
@@ -108,54 +179,8 @@ public class ComfyUIClient : IDisposable
     }
 
     /// <summary>
-    /// Checks the status of a queued prompt.
-    /// </summary>
-    /// <param name="promptId">The prompt ID to check.</param>
-    /// <returns>Tuple of (completed, error).</returns>
-    public async Task<(bool completed, bool error)> GetPromptStatusAsync(string promptId)
-    {
-        try
-        {
-            var response = await _client.GetAsync($"/history/{promptId}");
-            if (!response.IsSuccessStatusCode)
-                return (false, false);
-
-            var json = await response.Content.ReadAsStringAsync();
-            var root = JsonNode.Parse(json);
-
-            // History endpoint returns {} if prompt is still running
-            if (root is JsonObject obj && obj.ContainsKey(promptId))
-            {
-                var promptData = obj[promptId];
-                var status = promptData?["status"];
-
-                if (status != null)
-                {
-                    var statusCompleted = status["completed"]?.GetValue<bool>() ?? false;
-                    var statusError = status["status_str"]?.GetValue<string>() == "error";
-                    return (statusCompleted, statusError);
-                }
-
-                // If we have outputs, it's completed
-                var outputs = promptData?["outputs"];
-                if (outputs is JsonObject outputsObj && outputsObj.Count > 0)
-                    return (true, false);
-            }
-
-            return (false, false);
-        }
-        catch
-        {
-            return (false, true);
-        }
-    }
-
-    /// <summary>
     /// Downloads an output image from the ComfyUI server.
     /// </summary>
-    /// <param name="filename">Output image filename.</param>
-    /// <param name="subfolder">Output subfolder (default: empty).</param>
-    /// <returns>Image bytes.</returns>
     public async Task<byte[]> DownloadImageAsync(string filename, string subfolder = "")
     {
         var url = $"/view?filename={Uri.EscapeDataString(filename)}&type=output";
@@ -185,7 +210,6 @@ public class ComfyUIClient : IDisposable
         if (outputs is not JsonObject outputNodes)
             return null;
 
-        // Find the first node with images output
         foreach (var kvp in outputNodes)
         {
             var images = kvp.Value?["images"];
@@ -202,12 +226,66 @@ public class ComfyUIClient : IDisposable
         return null;
     }
 
+    #endregion
+
+    #region WebSocket Connection
+
     /// <summary>
-    /// Full generation pipeline: upload images → queue workflow → wait → download result.
+    /// Connects to the ComfyUI WebSocket endpoint.
     /// </summary>
-    /// <param name="request">The render request with images, prompt, and settings.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The render result with output image or error.</returns>
+    public async Task ConnectWebSocketAsync(CancellationToken ct = default)
+    {
+        if (_ws != null && _ws.State == WebSocketState.Open)
+            return;
+
+        _ws?.Dispose();
+        _ws = new ClientWebSocket();
+
+        var wsUrl = _baseUrl.Replace("http://", "ws://").Replace("https://", "wss://");
+        var uri = new Uri($"{wsUrl}/ws?clientId={_clientId}");
+
+        await _ws.ConnectAsync(uri, ct);
+    }
+
+    /// <summary>
+    /// Disconnects the WebSocket if connected.
+    /// </summary>
+    public async Task DisconnectWebSocketAsync()
+    {
+        if (_ws == null) return;
+
+        try
+        {
+            if (_ws.State == WebSocketState.Open)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", cts.Token);
+            }
+        }
+        catch
+        {
+            // Best-effort close
+        }
+        finally
+        {
+            _ws.Dispose();
+            _ws = null;
+        }
+    }
+
+    /// <summary>
+    /// Whether the WebSocket is currently connected.
+    /// </summary>
+    public bool IsWebSocketConnected => _ws?.State == WebSocketState.Open;
+
+    #endregion
+
+    #region Generation Pipeline
+
+    /// <summary>
+    /// Full generation pipeline using WebSocket for real-time progress and completion.
+    /// Falls back to HTTP polling if WebSocket is unavailable.
+    /// </summary>
     public async Task<RenderResult> GenerateAsync(RenderRequest request, CancellationToken ct)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -220,6 +298,8 @@ public class ComfyUIClient : IDisposable
                 request.ViewportImage,
                 $"glimpse_viewport_{DateTime.Now:yyyyMMdd_HHmmss}.png");
 
+            ct.ThrowIfCancellationRequested();
+
             // 2. Upload depth image if available
             string depthFilename = null;
             if (request.DepthImage != null && request.DepthImage.Length > 0)
@@ -229,7 +309,17 @@ public class ComfyUIClient : IDisposable
                     $"glimpse_depth_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             }
 
-            // 3. Build workflow
+            // 3. Auto-detect checkpoint
+            var checkpointName = await GetCheckpointForPresetAsync(request.Preset);
+            if (checkpointName == null)
+            {
+                return RenderResult.Fail(
+                    "No checkpoint models found in ComfyUI. Please install at least one SDXL checkpoint in ComfyUI/models/checkpoints/.",
+                    stopwatch.Elapsed);
+            }
+
+            // 4. Build workflow (uses SaveImageWebsocket when WS is connected)
+            var useWebSocketOutput = IsWebSocketConnected;
             var workflow = WorkflowBuilder.BuildWorkflow(
                 request.Preset,
                 viewportFilename,
@@ -237,50 +327,23 @@ public class ComfyUIClient : IDisposable
                 request.Prompt,
                 request.NegativePrompt,
                 request.DenoiseStrength,
-                seed);
+                seed,
+                checkpointName,
+                useWebSocketOutput);
 
-            // 4. Queue prompt
+            // 5. Queue prompt
             var promptId = await QueuePromptAsync(workflow);
 
-            // 5. Poll for completion
-            var deadline = DateTime.UtcNow + MaxWaitTime;
-            while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+            // 6. Wait for completion via WebSocket or HTTP polling
+            if (IsWebSocketConnected)
             {
-                var (completed, error) = await GetPromptStatusAsync(promptId);
-
-                if (error)
-                {
-                    return RenderResult.Fail("ComfyUI reported an error during generation.", stopwatch.Elapsed);
-                }
-
-                if (completed)
-                {
-                    // 6. Get output image info
-                    var imageInfo = await GetOutputImageInfoAsync(promptId);
-                    if (imageInfo == null)
-                    {
-                        return RenderResult.Fail("Generation completed but no output image found.", stopwatch.Elapsed);
-                    }
-
-                    // 7. Download output
-                    var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
-                    stopwatch.Stop();
-
-                    return RenderResult.Ok(
-                        imageData,
-                        imageInfo.Value.filename,
-                        stopwatch.Elapsed,
-                        request.Preset,
-                        seed);
-                }
-
-                await Task.Delay(PollIntervalMs, ct);
+                var result = await WaitForCompletionWebSocketAsync(promptId, request, seed, stopwatch, ct);
+                return result;
             }
-
-            if (ct.IsCancellationRequested)
-                return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
-
-            return RenderResult.Fail("Generation timed out.", stopwatch.Elapsed);
+            else
+            {
+                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -292,12 +355,257 @@ public class ComfyUIClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Waits for completion using WebSocket messages.
+    /// Handles progress updates, latent previews, and final image via binary messages.
+    /// </summary>
+    private async Task<RenderResult> WaitForCompletionWebSocketAsync(
+        string promptId, RenderRequest request, int seed, Stopwatch stopwatch, CancellationToken ct)
+    {
+        var buffer = new byte[4 * 1024 * 1024]; // 4 MB buffer for images
+        byte[] finalImageData = null;
+
+        var deadline = DateTime.UtcNow + MaxWaitTime;
+
+        while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+        {
+            if (_ws == null || _ws.State != WebSocketState.Open)
+            {
+                // WebSocket lost — fall back to polling
+                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+            }
+
+            WebSocketReceiveResult wsResult;
+            try
+            {
+                wsResult = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
+            }
+            catch (WebSocketException)
+            {
+                // Connection lost — fall back to polling
+                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+            }
+
+            if (wsResult.MessageType == WebSocketMessageType.Text)
+            {
+                var text = Encoding.UTF8.GetString(buffer, 0, wsResult.Count);
+                HandleTextMessage(text, promptId, out bool completed, out bool error);
+
+                if (error)
+                {
+                    return RenderResult.Fail(
+                        "ComfyUI reported an error during generation. Check ComfyUI console for details.",
+                        stopwatch.Elapsed);
+                }
+
+                if (completed)
+                {
+                    // If we used SaveImageWebsocket, the final image was received as binary
+                    if (finalImageData != null)
+                    {
+                        stopwatch.Stop();
+                        return RenderResult.Ok(finalImageData, "websocket_output.png", stopwatch.Elapsed, request.Preset, seed);
+                    }
+
+                    // Otherwise download from server via HTTP (SaveImage was used)
+                    var imageInfo = await GetOutputImageInfoAsync(promptId);
+                    if (imageInfo == null)
+                    {
+                        return RenderResult.Fail("Generation completed but no output image found.", stopwatch.Elapsed);
+                    }
+
+                    var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
+                    stopwatch.Stop();
+                    return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed);
+                }
+            }
+            else if (wsResult.MessageType == WebSocketMessageType.Binary)
+            {
+                // Binary messages: 8-byte header (4 bytes type + 4 bytes format) + PNG data
+                // Type 1 = preview image, Type 2 = final output
+                if (wsResult.Count > 8)
+                {
+                    int eventType = BitConverter.ToInt32(buffer, 0);
+                    var pngData = new byte[wsResult.Count - 8];
+                    Array.Copy(buffer, 8, pngData, 0, pngData.Length);
+
+                    if (eventType == 1)
+                    {
+                        // Latent preview image
+                        PreviewImageReceived?.Invoke(this, new PreviewImageEventArgs { ImageData = pngData });
+                    }
+                    else if (eventType == 2)
+                    {
+                        // Final output image from SaveImageWebsocket
+                        finalImageData = pngData;
+                    }
+                }
+            }
+            else if (wsResult.MessageType == WebSocketMessageType.Close)
+            {
+                // Server closed connection — fall back to polling
+                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+            }
+        }
+
+        if (ct.IsCancellationRequested)
+            return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
+
+        return RenderResult.Fail("Generation timed out.", stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Parses a text WebSocket message and updates progress/completion state.
+    /// </summary>
+    private void HandleTextMessage(string text, string promptId, out bool completed, out bool error)
+    {
+        completed = false;
+        error = false;
+
+        try
+        {
+            var root = JsonNode.Parse(text);
+            var type = root?["type"]?.GetValue<string>();
+            var data = root?["data"];
+
+            switch (type)
+            {
+                case "progress":
+                    var step = data?["value"]?.GetValue<int>() ?? 0;
+                    var maxSteps = data?["max"]?.GetValue<int>() ?? 0;
+                    ProgressChanged?.Invoke(this, new ProgressEventArgs { Step = step, TotalSteps = maxSteps });
+                    break;
+
+                case "executing":
+                    var node = data?["node"];
+                    var msgPromptId = data?["prompt_id"]?.GetValue<string>();
+                    // node == null means execution finished for this prompt
+                    if (node == null && msgPromptId == promptId)
+                    {
+                        completed = true;
+                    }
+                    break;
+
+                case "executed":
+                    var execPromptId = data?["prompt_id"]?.GetValue<string>();
+                    if (execPromptId == promptId)
+                    {
+                        completed = true;
+                    }
+                    break;
+
+                case "execution_error":
+                    var errPromptId = data?["prompt_id"]?.GetValue<string>();
+                    if (errPromptId == promptId)
+                    {
+                        error = true;
+                    }
+                    break;
+            }
+        }
+        catch
+        {
+            // Non-JSON message, ignore
+        }
+    }
+
+    /// <summary>
+    /// Fallback: HTTP polling for completion (used when WebSocket is unavailable).
+    /// </summary>
+    private async Task<RenderResult> WaitForCompletionPollingAsync(
+        string promptId, RenderRequest request, int seed, Stopwatch stopwatch, CancellationToken ct)
+    {
+        const int pollIntervalMs = 150;
+        var deadline = DateTime.UtcNow + MaxWaitTime;
+
+        while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+        {
+            var response = await _client.GetAsync($"/history/{promptId}", ct);
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync(ct);
+                var root = JsonNode.Parse(json);
+
+                if (root is JsonObject obj && obj.ContainsKey(promptId))
+                {
+                    var promptData = obj[promptId];
+                    var status = promptData?["status"];
+                    bool statusCompleted = false;
+                    bool statusError = false;
+
+                    if (status != null)
+                    {
+                        statusCompleted = status["completed"]?.GetValue<bool>() ?? false;
+                        statusError = status["status_str"]?.GetValue<string>() == "error";
+                    }
+                    else
+                    {
+                        var outputs = promptData?["outputs"];
+                        if (outputs is JsonObject outputsObj && outputsObj.Count > 0)
+                            statusCompleted = true;
+                    }
+
+                    if (statusError)
+                    {
+                        return RenderResult.Fail(
+                            "ComfyUI reported an error during generation. Check ComfyUI console for details.",
+                            stopwatch.Elapsed);
+                    }
+
+                    if (statusCompleted)
+                    {
+                        var imageInfo = await GetOutputImageInfoAsync(promptId);
+                        if (imageInfo == null)
+                        {
+                            return RenderResult.Fail("Generation completed but no output image found.", stopwatch.Elapsed);
+                        }
+
+                        var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
+                        stopwatch.Stop();
+                        return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed);
+                    }
+                }
+            }
+
+            await Task.Delay(pollIntervalMs, ct);
+        }
+
+        if (ct.IsCancellationRequested)
+            return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
+
+        return RenderResult.Fail("Generation timed out.", stopwatch.Elapsed);
+    }
+
+    #endregion
+
     public void Dispose()
     {
         if (!_disposed)
         {
-            _client?.Dispose();
             _disposed = true;
+            try { _ws?.Dispose(); } catch { }
+            _client?.Dispose();
         }
     }
+}
+
+/// <summary>
+/// Event args for sampling progress updates.
+/// </summary>
+public class ProgressEventArgs : EventArgs
+{
+    public int Step { get; set; }
+    public int TotalSteps { get; set; }
+}
+
+/// <summary>
+/// Event args for latent preview images received during generation.
+/// </summary>
+public class PreviewImageEventArgs : EventArgs
+{
+    public byte[] ImageData { get; set; }
 }

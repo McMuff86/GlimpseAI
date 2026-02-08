@@ -18,9 +18,9 @@ using Rhino.PlugIns;
 [assembly: AssemblyFileVersion("0.1.0.0")]
 [assembly: AssemblyInformationalVersion("0.1.0")]
 
-[assembly: PlugInDescription(DescriptionType.Address, "")]
+[assembly: PlugInDescription(DescriptionType.Address, "Switzerland")]
 [assembly: PlugInDescription(DescriptionType.Country, "Switzerland")]
-[assembly: PlugInDescription(DescriptionType.Email, "")]
+[assembly: PlugInDescription(DescriptionType.Email, "sentinel.core.ai@gmail.com")]
 [assembly: PlugInDescription(DescriptionType.Phone, "")]
 [assembly: PlugInDescription(DescriptionType.Organization, "Muff Software")]
 [assembly: PlugInDescription(DescriptionType.UpdateUrl, "https://github.com/McMuff86/GlimpseAI")]

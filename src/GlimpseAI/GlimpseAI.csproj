@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
-    <NoWarn>NU1701</NoWarn>
+    <NoWarn>NU1701;CA1416</NoWarn>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     
     <!-- Rhino Plugin Settings -->
@@ -33,7 +33,7 @@
     </PackageReference>
     
     <!-- Eto.Forms - Cross-platform UI -->
-    <PackageReference Include="Eto.Forms" Version="2.8.0">
+    <PackageReference Include="Eto.Forms" Version="2.7.5">
       <PrivateAssets>all</PrivateAssets>
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
@@ -45,7 +45,12 @@
     </PackageReference>
     
     <!-- JSON handling -->
-    <PackageReference Include="System.Text.Json" Version="7.0.0" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Yak package manifest - copy to output for packaging -->
+    <None Include="manifest.yml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -15,6 +15,7 @@ public class GlimpseOrchestrator : IDisposable
 {
     private readonly ComfyUIClient _comfyClient;
     private readonly ViewportWatcher _watcher;
+    private readonly GlimpseOverlayConduit _overlayConduit;
     private CancellationTokenSource _currentGenerationCts;
     private bool _disposed;
 
@@ -33,24 +34,68 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>Raised when the busy state changes (to enable/disable controls).</summary>
     public event EventHandler<bool> BusyChanged;
 
+    /// <summary>Raised when ComfyUI reports sampling progress.</summary>
+    public event EventHandler<ProgressEventArgs> ProgressChanged;
+
+    /// <summary>Raised when a latent preview image is received during generation.</summary>
+    public event EventHandler<PreviewImageEventArgs> PreviewImageReceived;
+
+    /// <summary>The overlay conduit for viewport rendering.</summary>
+    public GlimpseOverlayConduit OverlayConduit => _overlayConduit;
+
     public GlimpseOrchestrator(string comfyUrl, int debounceMs = 300)
     {
         _comfyClient = new ComfyUIClient(comfyUrl);
         _watcher = new ViewportWatcher(debounceMs);
         _watcher.ViewportChanged += OnViewportChanged;
+        _overlayConduit = new GlimpseOverlayConduit();
+
+        // Wire ComfyUI client events to orchestrator events
+        _comfyClient.ProgressChanged += (s, e) => ProgressChanged?.Invoke(this, e);
+        _comfyClient.PreviewImageReceived += OnPreviewImageFromComfy;
+
+        // Connect WebSocket on a background thread
+        Task.Run(ConnectWebSocketAsync);
     }
 
     /// <summary>
-    /// Called by the Generate button. Starts a one-shot generation on a background thread.
-    /// Cancels any previously running generation.
+    /// Connects/reconnects the WebSocket to ComfyUI.
+    /// </summary>
+    private async Task ConnectWebSocketAsync()
+    {
+        try
+        {
+            await _comfyClient.ConnectWebSocketAsync();
+            RhinoApp.WriteLine("Glimpse AI: WebSocket connected.");
+        }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"Glimpse AI: WebSocket connection failed ({ex.Message}), using HTTP polling.");
+        }
+    }
+
+    /// <summary>
+    /// Called by the Generate button (on the UI thread).
+    /// Captures the viewport immediately, then runs generation on a background thread.
     /// </summary>
     public void RequestGenerate(string prompt, PresetType preset, double denoise, int seed = -1)
     {
+        // Capture viewport on the current UI thread
+        var capture = CaptureCurrentViewport(preset);
+        if (capture.viewportImage == null)
+        {
+            RenderCompleted?.Invoke(this,
+                RenderResult.Fail("Failed to capture viewport. Make sure a 3D view is active.", TimeSpan.Zero));
+            return;
+        }
+
         CancelCurrentGeneration();
         _currentGenerationCts = new CancellationTokenSource();
         var ct = _currentGenerationCts.Token;
 
-        Task.Run(() => GenerateAsync(prompt, preset, denoise, seed, ct));
+        Task.Run(() => GenerateFromCaptureAsync(
+            capture.viewportImage, capture.depthImage,
+            prompt, preset, denoise, seed, ct));
     }
 
     /// <summary>
@@ -105,50 +150,102 @@ public class GlimpseOrchestrator : IDisposable
     }
 
     /// <summary>
-    /// Core generation pipeline: capture → upload → generate → return result.
+    /// Enables or disables the viewport overlay conduit.
+    /// </summary>
+    public void SetOverlayEnabled(bool enabled)
+    {
+        _overlayConduit.Enabled = enabled;
+        RhinoDoc.ActiveDoc?.Views.Redraw();
+    }
+
+    /// <summary>
+    /// Sets the overlay opacity (0.0–1.0).
+    /// </summary>
+    public void SetOverlayOpacity(double opacity)
+    {
+        _overlayConduit.Opacity = Math.Clamp(opacity, 0.0, 1.0);
+        RhinoDoc.ActiveDoc?.Views.Redraw();
+    }
+
+    /// <summary>
+    /// Captures the current viewport on the calling thread (must be UI thread).
+    /// </summary>
+    private (byte[] viewportImage, byte[] depthImage) CaptureCurrentViewport(PresetType preset)
+    {
+        try
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            if (doc == null)
+            {
+                RhinoApp.WriteLine("Glimpse AI: No active document.");
+                return (null, null);
+            }
+
+            var view = doc.Views.ActiveView;
+            if (view == null)
+            {
+                RhinoApp.WriteLine("Glimpse AI: No active view.");
+                return (null, null);
+            }
+
+            var viewport = view.ActiveViewport;
+            if (viewport == null)
+            {
+                RhinoApp.WriteLine("Glimpse AI: No active viewport.");
+                return (null, null);
+            }
+
+            var resolution = ViewportCapture.GetResolutionForPreset(preset);
+            RhinoApp.WriteLine($"Glimpse AI: Capturing viewport at {resolution.width}x{resolution.height}...");
+
+            var viewportImage = ViewportCapture.CaptureViewport(viewport, resolution.width, resolution.height);
+            byte[] depthImage = null;
+            try
+            {
+                depthImage = ViewportCapture.CaptureDepthApprox(viewport, resolution.width, resolution.height);
+            }
+            catch
+            {
+                // Depth capture is optional
+            }
+
+            RhinoApp.WriteLine($"Glimpse AI: Viewport captured ({viewportImage?.Length ?? 0} bytes).");
+            return (viewportImage, depthImage);
+        }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"Glimpse AI: Capture error: {ex.Message}");
+            return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// Core generation pipeline with pre-captured images.
     /// Runs entirely on a background thread; raises events for UI updates.
     /// </summary>
-    private async Task GenerateAsync(string prompt, PresetType preset, double denoise, int seed, CancellationToken ct)
+    private async Task GenerateFromCaptureAsync(
+        byte[] viewportImage, byte[] depthImage,
+        string prompt, PresetType preset, double denoise, int seed,
+        CancellationToken ct)
     {
         try
         {
             BusyChanged?.Invoke(this, true);
-            StatusChanged?.Invoke(this, "Capturing viewport…");
+            StatusChanged?.Invoke(this, "Sending to ComfyUI…");
 
-            // 1. Capture viewport image (must run on UI thread for Rhino API)
-            byte[] viewportImage = null;
-            byte[] depthImage = null;
-            var resolution = ViewportCapture.GetResolutionForPreset(preset);
-
-            // RhinoApp.InvokeOnUiThread is synchronous from caller's perspective
-            RhinoApp.InvokeOnUiThread((Action)(() =>
+            // Ensure WebSocket is connected (reconnect if needed)
+            if (!_comfyClient.IsWebSocketConnected)
             {
                 try
                 {
-                    var viewport = RhinoDoc.ActiveDoc?.Views?.ActiveView?.ActiveViewport;
-                    if (viewport == null) return;
-
-                    viewportImage = ViewportCapture.CaptureViewport(viewport, resolution.width, resolution.height);
-                    depthImage = ViewportCapture.CaptureDepthApprox(viewport, resolution.width, resolution.height);
+                    await _comfyClient.ConnectWebSocketAsync(ct);
                 }
-                catch (Exception ex)
+                catch
                 {
-                    RhinoApp.WriteLine($"Glimpse AI: Capture error: {ex.Message}");
+                    // Will fall back to HTTP polling
                 }
-            }));
-
-            ct.ThrowIfCancellationRequested();
-
-            if (viewportImage == null || viewportImage.Length == 0)
-            {
-                RenderCompleted?.Invoke(this,
-                    RenderResult.Fail("Failed to capture viewport.", TimeSpan.Zero));
-                return;
             }
 
-            StatusChanged?.Invoke(this, "Generating…");
-
-            // 2. Build render request
             var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
             var request = new RenderRequest
             {
@@ -161,10 +258,15 @@ public class GlimpseOrchestrator : IDisposable
                 Seed = seed
             };
 
-            // 3. Send to ComfyUI and wait for result
             var result = await _comfyClient.GenerateAsync(request, ct);
 
-            // 4. Notify UI
+            // Update the overlay conduit with the final image
+            if (result.Success && result.ImageData != null)
+            {
+                _overlayConduit.UpdateImage(result.ImageData);
+                RhinoDoc.ActiveDoc?.Views.Redraw();
+            }
+
             RenderCompleted?.Invoke(this, result);
         }
         catch (OperationCanceledException)
@@ -183,8 +285,23 @@ public class GlimpseOrchestrator : IDisposable
     }
 
     /// <summary>
+    /// Handles latent preview images from ComfyUI and forwards to overlay + event.
+    /// </summary>
+    private void OnPreviewImageFromComfy(object sender, PreviewImageEventArgs e)
+    {
+        // Update overlay with preview image during generation
+        if (_overlayConduit.Enabled)
+        {
+            _overlayConduit.UpdateImage(e.ImageData);
+            RhinoDoc.ActiveDoc?.Views.Redraw();
+        }
+
+        PreviewImageReceived?.Invoke(this, e);
+    }
+
+    /// <summary>
     /// Fired by the ViewportWatcher after debounce when the camera moves.
-    /// Cancels any in-flight generation and starts a new one.
+    /// Captures viewport on UI thread, then runs generation on background.
     /// </summary>
     private void OnViewportChanged(object sender, ViewportChangedEventArgs e)
     {
@@ -194,7 +311,34 @@ public class GlimpseOrchestrator : IDisposable
         _currentGenerationCts = new CancellationTokenSource();
         var ct = _currentGenerationCts.Token;
 
-        Task.Run(() => GenerateAsync(_autoPrompt, _autoPreset, _autoDenoise, _autoSeed, ct));
+        Task.Run(async () =>
+        {
+            byte[] viewportImage = null;
+            byte[] depthImage = null;
+
+            var tcs = new TaskCompletionSource<bool>();
+            RhinoApp.InvokeOnUiThread(new Action(() =>
+            {
+                try
+                {
+                    var capture = CaptureCurrentViewport(_autoPreset);
+                    viewportImage = capture.viewportImage;
+                    depthImage = capture.depthImage;
+                }
+                finally
+                {
+                    tcs.TrySetResult(true);
+                }
+            }));
+
+            await tcs.Task;
+
+            if (viewportImage == null || viewportImage.Length == 0) return;
+
+            await GenerateFromCaptureAsync(
+                viewportImage, depthImage,
+                _autoPrompt, _autoPreset, _autoDenoise, _autoSeed, ct);
+        });
     }
 
     /// <summary>
@@ -221,6 +365,8 @@ public class GlimpseOrchestrator : IDisposable
             _disposed = true;
             CancelCurrentGeneration();
             _watcher?.Dispose();
+            _overlayConduit?.Dispose();
+            try { _comfyClient.DisconnectWebSocketAsync().GetAwaiter().GetResult(); } catch { }
             _comfyClient?.Dispose();
         }
     }
