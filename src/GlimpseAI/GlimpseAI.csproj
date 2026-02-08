@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net7.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <NoWarn>NU1701</NoWarn>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    
+    <!-- Rhino Plugin Settings -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    
+    <!-- Assembly Info -->
+    <AssemblyName>GlimpseAI</AssemblyName>
+    <TargetExt>.rhp</TargetExt>
+    <RootNamespace>GlimpseAI</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>Adrian Muff</Authors>
+    <Company>Muff Software</Company>
+    <Copyright>Copyright © 2026 Adrian Muff</Copyright>
+    <Description>Glimpse AI - Real-time AI Preview Rendering for Rhino 8</Description>
+    <Product>GlimpseAI</Product>
+    <AssemblyTitle>Glimpse AI</AssemblyTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- RhinoCommon - Rhino 8 SDK -->
+    <PackageReference Include="RhinoCommon" Version="8.0.23304.9001">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    
+    <!-- Eto.Forms - Cross-platform UI -->
+    <PackageReference Include="Eto.Forms" Version="2.8.0">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    
+    <!-- System.Drawing for Bitmap support -->
+    <PackageReference Include="System.Drawing.Common" Version="7.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    
+    <!-- JSON handling -->
+    <PackageReference Include="System.Text.Json" Version="7.0.0" />
+  </ItemGroup>
+
+</Project>
