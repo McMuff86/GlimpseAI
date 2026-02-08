@@ -318,8 +318,8 @@ public class ComfyUIClient : IDisposable
                     stopwatch.Elapsed);
             }
 
-            // 4. Build workflow (uses SaveImageWebsocket when WS is connected)
-            var useWebSocketOutput = IsWebSocketConnected;
+            // 4. Build workflow — always use SaveImage for reliable output retrieval
+            // WebSocket is used for progress/previews only, not for final image delivery
             var workflow = WorkflowBuilder.BuildWorkflow(
                 request.Preset,
                 viewportFilename,
@@ -329,7 +329,7 @@ public class ComfyUIClient : IDisposable
                 request.DenoiseStrength,
                 seed,
                 checkpointName,
-                useWebSocketOutput);
+                useWebSocketOutput: false);
 
             // 5. Queue prompt
             var promptId = await QueuePromptAsync(workflow);
@@ -356,14 +356,13 @@ public class ComfyUIClient : IDisposable
     }
 
     /// <summary>
-    /// Waits for completion using WebSocket messages.
-    /// Handles progress updates, latent previews, and final image via binary messages.
+    /// Waits for completion using WebSocket messages for instant detection.
+    /// Progress and latent previews are delivered via WebSocket; final image is downloaded via HTTP.
     /// </summary>
     private async Task<RenderResult> WaitForCompletionWebSocketAsync(
         string promptId, RenderRequest request, int seed, Stopwatch stopwatch, CancellationToken ct)
     {
-        var buffer = new byte[4 * 1024 * 1024]; // 4 MB buffer for images
-        byte[] finalImageData = null;
+        var buffer = new byte[4 * 1024 * 1024]; // 4 MB buffer for preview images
 
         var deadline = DateTime.UtcNow + MaxWaitTime;
 
@@ -371,7 +370,6 @@ public class ComfyUIClient : IDisposable
         {
             if (_ws == null || _ws.State != WebSocketState.Open)
             {
-                // WebSocket lost — fall back to polling
                 return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
             }
 
@@ -386,7 +384,6 @@ public class ComfyUIClient : IDisposable
             }
             catch (WebSocketException)
             {
-                // Connection lost — fall back to polling
                 return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
             }
 
@@ -404,14 +401,7 @@ public class ComfyUIClient : IDisposable
 
                 if (completed)
                 {
-                    // If we used SaveImageWebsocket, the final image was received as binary
-                    if (finalImageData != null)
-                    {
-                        stopwatch.Stop();
-                        return RenderResult.Ok(finalImageData, "websocket_output.png", stopwatch.Elapsed, request.Preset, seed);
-                    }
-
-                    // Otherwise download from server via HTTP (SaveImage was used)
+                    // Download the final image via HTTP (SaveImage wrote it to disk)
                     var imageInfo = await GetOutputImageInfoAsync(promptId);
                     if (imageInfo == null)
                     {
@@ -425,29 +415,24 @@ public class ComfyUIClient : IDisposable
             }
             else if (wsResult.MessageType == WebSocketMessageType.Binary)
             {
-                // Binary messages: 8-byte header (4 bytes type + 4 bytes format) + PNG data
-                // Type 1 = preview image, Type 2 = final output
+                // Binary messages from ComfyUI: 4-byte big-endian type header + image data
+                // Type 1 = latent preview image (JPEG/PNG)
                 if (wsResult.Count > 8)
                 {
-                    int eventType = BitConverter.ToInt32(buffer, 0);
-                    var pngData = new byte[wsResult.Count - 8];
-                    Array.Copy(buffer, 8, pngData, 0, pngData.Length);
+                    // Read type as big-endian uint32
+                    int eventType = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
 
-                    if (eventType == 1)
+                    if (eventType == 1 || eventType == 2)
                     {
-                        // Latent preview image
+                        // Skip 8-byte header (4 bytes type + 4 bytes format)
+                        var pngData = new byte[wsResult.Count - 8];
+                        Array.Copy(buffer, 8, pngData, 0, pngData.Length);
                         PreviewImageReceived?.Invoke(this, new PreviewImageEventArgs { ImageData = pngData });
-                    }
-                    else if (eventType == 2)
-                    {
-                        // Final output image from SaveImageWebsocket
-                        finalImageData = pngData;
                     }
                 }
             }
             else if (wsResult.MessageType == WebSocketMessageType.Close)
             {
-                // Server closed connection — fall back to polling
                 return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
             }
         }
