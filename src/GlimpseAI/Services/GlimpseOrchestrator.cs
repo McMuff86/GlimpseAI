@@ -18,6 +18,8 @@ public class GlimpseOrchestrator : IDisposable
     private readonly GlimpseOverlayConduit _overlayConduit;
     private CancellationTokenSource _currentGenerationCts;
     private bool _disposed;
+    private bool _isFluxAvailable;
+    private bool _useFlux;
 
     // Auto-mode settings (updated from UI)
     private string _autoPrompt;
@@ -55,12 +57,13 @@ public class GlimpseOrchestrator : IDisposable
         _comfyClient.ProgressChanged += (s, e) => ProgressChanged?.Invoke(this, e);
         _comfyClient.PreviewImageReceived += OnPreviewImageFromComfy;
 
-        // Connect WebSocket on a background thread with error handling
+        // Connect WebSocket and detect models on a background thread with error handling
         _ = Task.Run(async () =>
         {
             try
             {
                 await ConnectWebSocketAsync();
+                await DetectAvailableModelsAsync();
             }
             catch (Exception ex)
             {
@@ -82,6 +85,58 @@ public class GlimpseOrchestrator : IDisposable
         catch (Exception ex)
         {
             RhinoApp.WriteLine($"Glimpse AI: WebSocket connection failed ({ex.Message}), using HTTP polling.");
+        }
+    }
+
+    /// <summary>
+    /// Detects available models (Flux vs SDXL) and sets the pipeline mode.
+    /// </summary>
+    private async Task DetectAvailableModelsAsync()
+    {
+        try
+        {
+            _isFluxAvailable = await _comfyClient.IsFluxAvailableAsync();
+            var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+
+            if (_isFluxAvailable && settings.PreferFlux)
+            {
+                RhinoApp.WriteLine("Glimpse AI: Flux models detected - using Flux pipeline");
+                _useFlux = true;
+                
+                // Auto-detect and save Flux models if not already configured
+                if (string.IsNullOrEmpty(settings.FluxUNetModel))
+                {
+                    var detectedUnet = await _comfyClient.GetFluxUNetAsync();
+                    if (!string.IsNullOrEmpty(detectedUnet))
+                    {
+                        settings.FluxUNetModel = detectedUnet;
+                        RhinoApp.WriteLine($"Glimpse AI: Auto-detected Flux UNet: {detectedUnet}");
+                    }
+                }
+
+                if (string.IsNullOrEmpty(settings.FluxControlNetModel))
+                {
+                    var detectedControlNet = await _comfyClient.GetFluxControlNetAsync();
+                    if (!string.IsNullOrEmpty(detectedControlNet))
+                    {
+                        settings.FluxControlNetModel = detectedControlNet;
+                        RhinoApp.WriteLine($"Glimpse AI: Auto-detected Flux ControlNet: {detectedControlNet}");
+                    }
+                }
+
+                // Save updated settings
+                GlimpseAIPlugin.Instance?.SaveGlimpseSettings();
+            }
+            else
+            {
+                RhinoApp.WriteLine("Glimpse AI: Using SDXL pipeline");
+                _useFlux = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"Glimpse AI: Model detection failed: {ex.Message}");
+            _useFlux = false; // Fallback to SDXL
         }
     }
 
@@ -369,7 +424,13 @@ public class GlimpseOrchestrator : IDisposable
                 Preset = preset,
                 DenoiseStrength = denoise,
                 CfgScale = cfgScale,
-                Seed = seed
+                Seed = seed,
+                UseFlux = _useFlux,
+                FluxUnetModel = _useFlux ? settings.FluxUNetModel : null,
+                FluxClip1 = _useFlux ? settings.FluxClipModel1 : null,
+                FluxClip2 = _useFlux ? settings.FluxClipModel2 : null,
+                FluxVae = _useFlux ? settings.FluxVaeModel : null,
+                FluxControlNet = _useFlux ? settings.FluxControlNetModel : null
             };
 
             var result = await _comfyClient.GenerateAsync(request, ct);
@@ -387,12 +448,24 @@ public class GlimpseOrchestrator : IDisposable
                     resolution = $"{res.width}x{res.height}";
                 }
 
-                RhinoApp.WriteLine($"Glimpse AI: Model: {result.CheckpointName ?? "Unknown"}");
-                if (settings.UseControlNet && preset != PresetType.Fast)
+                if (_useFlux)
                 {
-                    RhinoApp.WriteLine($"Glimpse AI: ControlNet: {settings.ControlNetModel ?? "Auto"} (strength: {settings.ControlNetStrength:F1})");
+                    RhinoApp.WriteLine($"Glimpse AI: Flux UNet: {settings.FluxUNetModel ?? "Unknown"}");
+                    if (preset != PresetType.Fast && !string.IsNullOrEmpty(settings.FluxControlNetModel))
+                    {
+                        RhinoApp.WriteLine($"Glimpse AI: Flux ControlNet: {settings.FluxControlNetModel} (strength: {settings.ControlNetStrength:F1})");
+                    }
                 }
-                RhinoApp.WriteLine($"Glimpse AI: Resolution: {resolution} | Steps: {GetStepsForPreset(preset)}");
+                else
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Model: {result.CheckpointName ?? "Unknown"}");
+                    if (settings.UseControlNet && preset != PresetType.Fast)
+                    {
+                        RhinoApp.WriteLine($"Glimpse AI: ControlNet: {settings.ControlNetModel ?? "Auto"} (strength: {settings.ControlNetStrength:F1})");
+                    }
+                }
+                var pipelineType = _useFlux ? "Flux" : "SDXL";
+                RhinoApp.WriteLine($"Glimpse AI: Pipeline: {pipelineType} | Resolution: {resolution} | Steps: {GetStepsForPreset(preset)}");
                 RhinoApp.WriteLine($"Glimpse AI: Generation complete in {stopwatch.Elapsed.TotalSeconds:F1}s");
                 RhinoApp.WriteLine($"Glimpse AI: Memory: {GC.GetTotalMemory(false) / 1024 / 1024}MB managed | Model: {result.CheckpointName ?? "Unknown"} | Preset: {preset}");
             }
@@ -454,16 +527,30 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>
     /// Gets the number of steps for a given preset (for logging purposes).
     /// </summary>
-    private static int GetStepsForPreset(PresetType preset)
+    private int GetStepsForPreset(PresetType preset)
     {
-        return preset switch
+        if (_useFlux)
         {
-            PresetType.Fast => 8,
-            PresetType.Balanced => 20,
-            PresetType.HighQuality => 30,
-            PresetType.Export4K => 30,
-            _ => 20
-        };
+            return preset switch
+            {
+                PresetType.Fast => 6,
+                PresetType.Balanced => 20,
+                PresetType.HighQuality => 28,
+                PresetType.Export4K => 28,
+                _ => 20
+            };
+        }
+        else
+        {
+            return preset switch
+            {
+                PresetType.Fast => 8,
+                PresetType.Balanced => 20,
+                PresetType.HighQuality => 30,
+                PresetType.Export4K => 30,
+                _ => 20
+            };
+        }
     }
 
     /// <summary>

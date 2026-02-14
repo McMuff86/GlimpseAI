@@ -44,4 +44,34 @@ public class RenderRequest
     /// CFG Scale for prompt guidance (1.0-20.0).
     /// </summary>
     public double CfgScale { get; set; } = 7.0;
+
+    /// <summary>
+    /// Whether to use Flux pipeline instead of SDXL/SD1.5.
+    /// </summary>
+    public bool UseFlux { get; set; } = false;
+
+    /// <summary>
+    /// Flux UNet model name (required if UseFlux=true).
+    /// </summary>
+    public string FluxUnetModel { get; set; }
+
+    /// <summary>
+    /// Flux CLIP model 1 (required if UseFlux=true).
+    /// </summary>
+    public string FluxClip1 { get; set; }
+
+    /// <summary>
+    /// Flux CLIP model 2 (required if UseFlux=true).
+    /// </summary>
+    public string FluxClip2 { get; set; }
+
+    /// <summary>
+    /// Flux VAE model (required if UseFlux=true).
+    /// </summary>
+    public string FluxVae { get; set; }
+
+    /// <summary>
+    /// Flux ControlNet model (for non-Fast presets).
+    /// </summary>
+    public string FluxControlNet { get; set; }
 }

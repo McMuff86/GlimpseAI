@@ -61,6 +61,24 @@ public class GlimpseSettings
     /// <summary>Whether to use aggressive memory cleanup after generation.</summary>
     public bool AggressiveMemoryCleanup { get; set; } = false;
 
+    /// <summary>Whether to prefer Flux models over SDXL when available.</summary>
+    public bool PreferFlux { get; set; } = true;
+
+    /// <summary>Preferred Flux UNet model name (auto-detected if empty).</summary>
+    public string FluxUNetModel { get; set; } = "";
+
+    /// <summary>Flux CLIP model 1 (typically clip_l.safetensors).</summary>
+    public string FluxClipModel1 { get; set; } = "clip_l.safetensors";
+
+    /// <summary>Flux CLIP model 2 (typically t5xxl_fp8_e4m3fn.safetensors).</summary>
+    public string FluxClipModel2 { get; set; } = "t5xxl_fp8_e4m3fn.safetensors";
+
+    /// <summary>Flux VAE model (typically ae.safetensors).</summary>
+    public string FluxVaeModel { get; set; } = "ae.safetensors";
+
+    /// <summary>Flux ControlNet model (typically InstantX_FLUX.1-dev-Controlnet-Union.safetensors).</summary>
+    public string FluxControlNetModel { get; set; } = "";
+
     /// <summary>Serialize to JSON string.</summary>
     public string ToJson()
     {

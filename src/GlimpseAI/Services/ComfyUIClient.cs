@@ -507,43 +507,64 @@ public class ComfyUIClient : IDisposable
                     $"glimpse_depth_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             }
 
-            // 3. Auto-detect checkpoint
-            var checkpointName = await GetCheckpointForPresetAsync(request.Preset);
-            if (checkpointName == null)
-            {
-                return RenderResult.Fail(
-                    "No checkpoint models found in ComfyUI. Please install at least one SDXL checkpoint in ComfyUI/models/checkpoints/.",
-                    stopwatch.Elapsed);
-            }
-
-            // 4. Get ControlNet settings from GlimpseSettings
+            // 3. Get models based on pipeline (Flux vs SDXL)
             var settings = GlimpseAI.GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+            string checkpointName = null;
             string controlNetModel = null;
-            
-            // Auto-detect ControlNet model (for non-Fast presets) if enabled
-            if (request.Preset != PresetType.Fast && settings.UseControlNet)
+
+            if (request.UseFlux)
             {
-                if (!string.IsNullOrEmpty(settings.ControlNetModel))
+                // Validate Flux models are provided
+                if (string.IsNullOrEmpty(request.FluxUnetModel) || string.IsNullOrEmpty(request.FluxClip1) ||
+                    string.IsNullOrEmpty(request.FluxClip2) || string.IsNullOrEmpty(request.FluxVae))
                 {
-                    controlNetModel = settings.ControlNetModel;
+                    return RenderResult.Fail(
+                        "Flux pipeline requested but required models (UNet, CLIP1, CLIP2, VAE) not provided.",
+                        stopwatch.Elapsed);
                 }
-                else
+
+                // Use provided Flux ControlNet for non-Fast presets
+                if (request.Preset != PresetType.Fast && !string.IsNullOrEmpty(request.FluxControlNet))
                 {
-                    controlNetModel = await GetBestDepthControlNetAsync(checkpointName);
-                    if (controlNetModel == null)
+                    controlNetModel = request.FluxControlNet;
+                }
+            }
+            else
+            {
+                // SDXL/SD1.5 pipeline - auto-detect checkpoint
+                checkpointName = await GetCheckpointForPresetAsync(request.Preset);
+                if (checkpointName == null)
+                {
+                    return RenderResult.Fail(
+                        "No checkpoint models found in ComfyUI. Please install at least one SDXL checkpoint in ComfyUI/models/checkpoints/.",
+                        stopwatch.Elapsed);
+                }
+
+                // Auto-detect ControlNet model (for non-Fast presets) if enabled
+                if (request.Preset != PresetType.Fast && settings.UseControlNet)
+                {
+                    if (!string.IsNullOrEmpty(settings.ControlNetModel))
                     {
-                        Rhino.RhinoApp.WriteLine("Glimpse AI: No ControlNet models found - falling back to img2img for this generation");
+                        controlNetModel = settings.ControlNetModel;
                     }
                     else
                     {
-                        // Save the auto-detected model for next time
-                        settings.ControlNetModel = controlNetModel;
-                        GlimpseAI.GlimpseAIPlugin.Instance?.SaveGlimpseSettings();
+                        controlNetModel = await GetBestDepthControlNetAsync(checkpointName);
+                        if (controlNetModel == null)
+                        {
+                            Rhino.RhinoApp.WriteLine("Glimpse AI: No ControlNet models found - falling back to img2img for this generation");
+                        }
+                        else
+                        {
+                            // Save the auto-detected model for next time
+                            settings.ControlNetModel = controlNetModel;
+                            GlimpseAI.GlimpseAIPlugin.Instance?.SaveGlimpseSettings();
+                        }
                     }
                 }
             }
 
-            // 5. Build workflow — always use SaveImage for reliable output retrieval
+            // 4. Build workflow — always use SaveImage for reliable output retrieval
             // WebSocket is used for progress/previews only, not for final image delivery
             var workflow = WorkflowBuilder.BuildWorkflow(
                 request.Preset,
@@ -558,7 +579,12 @@ public class ComfyUIClient : IDisposable
                 controlNetModel,
                 controlNetStrength: settings.ControlNetStrength,
                 useDepthPreprocessor: settings.UseDepthPreprocessor,
-                useWebSocketOutput: false);
+                useWebSocketOutput: false,
+                useFlux: request.UseFlux,
+                fluxUnetModel: request.FluxUnetModel,
+                fluxClip1: request.FluxClip1,
+                fluxClip2: request.FluxClip2,
+                fluxVae: request.FluxVae);
 
             // 5. Queue prompt
             var promptId = await QueuePromptAsync(workflow);
@@ -878,6 +904,148 @@ public class ComfyUIClient : IDisposable
             return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
 
         return RenderResult.Fail("Generation timed out.", stopwatch.Elapsed);
+    }
+
+    #endregion
+
+    #region Flux Model Detection
+
+    /// <summary>
+    /// Queries ComfyUI for available Flux UNet models via UNETLoader.
+    /// </summary>
+    public async Task<List<string>> GetAvailableFluxUNetsAsync()
+    {
+        try
+        {
+            var response = await _client.GetAsync("/object_info/UNETLoader");
+            if (!response.IsSuccessStatusCode)
+                return new List<string>();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var root = JsonNode.Parse(json);
+
+            var unetNames = root?["UNETLoader"]?["input"]?["required"]?["unet_name"];
+            if (unetNames is JsonArray outerArr && outerArr.Count > 0 && outerArr[0] is JsonArray namesArr)
+            {
+                return namesArr
+                    .Select(n => n?.GetValue<string>())
+                    .Where(n => n != null && (
+                        n.Contains("flux", StringComparison.OrdinalIgnoreCase) ||
+                        n.Contains("dev", StringComparison.OrdinalIgnoreCase) && n.Contains("fp8", StringComparison.OrdinalIgnoreCase)
+                    ))
+                    .ToList();
+            }
+
+            return new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Checks if Flux models are available (UNETLoader node exists and Flux UNet is available).
+    /// </summary>
+    public async Task<bool> IsFluxAvailableAsync()
+    {
+        try
+        {
+            // First check if UNETLoader node exists
+            var response = await _client.GetAsync("/object_info/UNETLoader");
+            if (!response.IsSuccessStatusCode)
+                return false;
+
+            // Check if DualCLIPLoader exists (required for Flux)
+            var clipResponse = await _client.GetAsync("/object_info/DualCLIPLoader");
+            if (!clipResponse.IsSuccessStatusCode)
+                return false;
+
+            // Check if we have any Flux UNet models
+            var fluxUnets = await GetAvailableFluxUNetsAsync();
+            return fluxUnets.Count > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets the best available Flux UNet model.
+    /// Prefers: flux1-dev-fp8, flux_dev_small, then any other flux model.
+    /// </summary>
+    public async Task<string> GetFluxUNetAsync()
+    {
+        var available = await GetAvailableFluxUNetsAsync();
+        if (available.Count == 0)
+            return null;
+
+        // Preferred Flux UNet models in order of preference
+        var preferred = new[]
+        {
+            "flux1-dev-fp8",
+            "flux_dev_small",
+            "flux1-dev",
+            "flux-dev"
+        };
+
+        foreach (var pref in preferred)
+        {
+            var match = available.FirstOrDefault(a =>
+                a.Contains(pref, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+                return match;
+        }
+
+        // Return first available Flux model
+        return available.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Gets the best available Flux ControlNet model.
+    /// Looks for InstantX Union or other Flux-compatible ControlNets.
+    /// </summary>
+    public async Task<string> GetFluxControlNetAsync()
+    {
+        try
+        {
+            var allControlNets = await GetAvailableControlNetsAsync();
+            if (allControlNets.Count == 0)
+                return null;
+
+            // Filter for Flux-compatible ControlNets
+            var fluxControlNets = allControlNets
+                .Where(cn => cn.Contains("flux", StringComparison.OrdinalIgnoreCase) ||
+                           cn.Contains("InstantX", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (fluxControlNets.Count == 0)
+                return null;
+
+            // Preferred Flux ControlNet models in order of preference
+            var preferred = new[]
+            {
+                "InstantX_FLUX.1-dev-Controlnet-Union",
+                "flux-controlnet",
+                "InstantX-FLUX"
+            };
+
+            foreach (var pref in preferred)
+            {
+                var match = fluxControlNets.FirstOrDefault(cn =>
+                    cn.Contains(pref, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                    return match;
+            }
+
+            // Return first available Flux ControlNet
+            return fluxControlNets.FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     #endregion
