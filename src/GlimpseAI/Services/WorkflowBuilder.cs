@@ -905,6 +905,273 @@ public static class WorkflowBuilder
 
     #endregion
 
+    #region Hunyuan3D Mesh Workflow
+
+    /// <summary>
+    /// Builds a Hunyuan3D v2 mesh generation workflow that takes an input image
+    /// and produces a textured 3D GLB mesh through a multi-stage pipeline:
+    /// background removal → delight → mesh generation → UV wrap → texture baking → export.
+    /// </summary>
+    public static Dictionary<string, object> BuildHunyuan3DMeshWorkflow(
+        string inputImageName, long seed, bool textured = true)
+    {
+        var workflow = new Dictionary<string, object>();
+
+        // === Stage 1: Load Models ===
+        workflow["10"] = MakeNode("Hy3DModelLoader", new Dictionary<string, object>
+        {
+            ["model"] = "flux1-dev-fp8.safetensors",
+            ["attention_mode"] = "sdpa",
+            ["cublas_ops"] = false
+        });
+
+        workflow["28"] = MakeNode("DownloadAndLoadHy3DDelightModel", new Dictionary<string, object>
+        {
+            ["model"] = "hunyuan3d-delight-v2-0"
+        });
+
+        workflow["85"] = MakeNode("DownloadAndLoadHy3DPaintModel", new Dictionary<string, object>
+        {
+            ["model"] = "hunyuan3d-paint-v2-0"
+        });
+
+        // === Stage 2: Preprocess Input Image ===
+        workflow["50"] = MakeNode("LoadImage", new Dictionary<string, object>
+        {
+            ["image"] = inputImageName
+        });
+
+        workflow["55"] = MakeNode("TransparentBGSession+", new Dictionary<string, object>
+        {
+            ["mode"] = "base",
+            ["use_jit"] = true
+        });
+
+        workflow["52"] = MakeNode("ImageResize+", new Dictionary<string, object>
+        {
+            ["width"] = 518,
+            ["height"] = 518,
+            ["interpolation"] = "lanczos",
+            ["method"] = "pad",
+            ["conditions"] = "always",
+            ["multiple_of"] = 2,
+            ["image"] = new object[] { "50", 0 }
+        });
+
+        workflow["56"] = MakeNode("ImageRemoveBackground+", new Dictionary<string, object>
+        {
+            ["image"] = new object[] { "52", 0 },
+            ["rembg_session"] = new object[] { "55", 0 }
+        });
+
+        workflow["202"] = MakeNode("InvertMask", new Dictionary<string, object>
+        {
+            ["mask"] = new object[] { "56", 1 }
+        });
+
+        workflow["195"] = MakeNode("JoinImageWithAlpha", new Dictionary<string, object>
+        {
+            ["image"] = new object[] { "56", 0 },
+            ["alpha"] = new object[] { "202", 0 }
+        });
+
+        // === Stage 3: Delight (remove lighting) ===
+        workflow["35"] = MakeNode("Hy3DDelightImage", new Dictionary<string, object>
+        {
+            ["steps"] = 50,
+            ["width"] = 512,
+            ["height"] = 512,
+            ["cfg_image"] = 1,
+            ["seed"] = 0,
+            ["delight_pipe"] = new object[] { "28", 0 },
+            ["image"] = new object[] { "195", 0 }
+        });
+
+        // === Stage 4: Camera Config ===
+        workflow["61"] = MakeNode("Hy3DCameraConfig", new Dictionary<string, object>
+        {
+            ["camera_azimuths"] = "0, 90, 180, 270, 0, 180",
+            ["camera_elevations"] = "0, 0, 0, 0, 90, -90",
+            ["view_weights"] = "1, 0.1, 0.5, 0.1, 0.05, 0.05",
+            ["camera_distance"] = 1.45,
+            ["ortho_scale"] = 1.2
+        });
+
+        // === Stage 5: Generate Mesh from Multi-View ===
+        workflow["148"] = MakeNode("Hy3DDiffusersSchedulerConfig", new Dictionary<string, object>
+        {
+            ["scheduler"] = "Euler A",
+            ["sigmas"] = "default",
+            ["pipeline"] = new object[] { "10", 0 }
+        });
+
+        workflow["166"] = MakeNode("Hy3DGenerateMeshMultiView", new Dictionary<string, object>
+        {
+            ["guidance_scale"] = 5.5,
+            ["steps"] = 50,
+            ["seed"] = seed,
+            ["pipeline"] = new object[] { "148", 0 },
+            ["front"] = new object[] { "195", 0 },
+            ["scheduler"] = new object[] { "148", 1 }
+        });
+
+        // === Stage 6: VAE Decode (latent → mesh) ===
+        workflow["140"] = MakeNode("Hy3DVAEDecode", new Dictionary<string, object>
+        {
+            ["box_v"] = 1.01,
+            ["octree_resolution"] = 512,
+            ["num_chunks"] = 32000,
+            ["mc_level"] = 0,
+            ["mc_algo"] = "mc",
+            ["enable_flash_vdm"] = true,
+            ["force_offload"] = true,
+            ["vae"] = new object[] { "10", 1 },
+            ["latents"] = new object[] { "166", 0 }
+        });
+
+        // === Stage 7: Post-process Mesh ===
+        workflow["203"] = MakeNode("Hy3DPostprocessMesh", new Dictionary<string, object>
+        {
+            ["remove_floaters"] = true,
+            ["remove_degenerate_faces"] = true,
+            ["reduce_faces"] = true,
+            ["max_facenum"] = 50000,
+            ["smooth_normals"] = false,
+            ["trimesh"] = new object[] { "140", 0 }
+        });
+
+        // === Stage 8: UV Wrap ===
+        workflow["83"] = MakeNode("Hy3DMeshUVWrap", new Dictionary<string, object>
+        {
+            ["trimesh"] = new object[] { "203", 0 }
+        });
+
+        // === Stage 13a: Export untextured mesh ===
+        workflow["17"] = MakeNode("Hy3DExportMesh", new Dictionary<string, object>
+        {
+            ["filename_prefix"] = "3D/Hy3D",
+            ["file_format"] = "glb",
+            ["save_file"] = true,
+            ["trimesh"] = new object[] { "83", 0 }
+        });
+
+        if (textured)
+        {
+            // === Stage 9: Render views for texture baking ===
+            workflow["79"] = MakeNode("Hy3DRenderMultiView", new Dictionary<string, object>
+            {
+                ["render_size"] = 1024,
+                ["texture_size"] = 2048,
+                ["normal_space"] = "world",
+                ["trimesh"] = new object[] { "83", 0 },
+                ["camera_config"] = new object[] { "61", 0 }
+            });
+
+            // === Stage 10: Paint/Sample Multi-View textures ===
+            workflow["149"] = MakeNode("Hy3DDiffusersSchedulerConfig", new Dictionary<string, object>
+            {
+                ["scheduler"] = "Euler A",
+                ["sigmas"] = "default",
+                ["pipeline"] = new object[] { "85", 0 }
+            });
+
+            workflow["132"] = MakeNode("SolidMask", new Dictionary<string, object>
+            {
+                ["value"] = 0.8,
+                ["width"] = 512,
+                ["height"] = 512
+            });
+
+            workflow["133"] = MakeNode("MaskToImage", new Dictionary<string, object>
+            {
+                ["mask"] = new object[] { "132", 0 }
+            });
+
+            workflow["184"] = MakeNode("RepeatImageBatch", new Dictionary<string, object>
+            {
+                ["amount"] = 3,
+                ["image"] = new object[] { "133", 0 }
+            });
+
+            workflow["64"] = MakeNode("ImageCompositeMasked", new Dictionary<string, object>
+            {
+                ["x"] = 0,
+                ["y"] = 0,
+                ["resize_source"] = false,
+                ["destination"] = new object[] { "79", 1 },
+                ["source"] = new object[] { "184", 0 },
+                ["mask"] = new object[] { "79", 2 }
+            });
+
+            workflow["88"] = MakeNode("Hy3DSampleMultiView", new Dictionary<string, object>
+            {
+                ["view_size"] = 512,
+                ["steps"] = 50,
+                ["seed"] = 1027,
+                ["denoise_strength"] = 1,
+                ["pipeline"] = new object[] { "149", 0 },
+                ["ref_image"] = new object[] { "35", 0 },
+                ["normal_maps"] = new object[] { "64", 0 },
+                ["position_maps"] = new object[] { "79", 3 },
+                ["camera_config"] = new object[] { "61", 0 }
+            });
+
+            // === Stage 11: Upscale & Bake Texture ===
+            workflow["117"] = MakeNode("ImageResize+", new Dictionary<string, object>
+            {
+                ["width"] = 2048,
+                ["height"] = 2048,
+                ["interpolation"] = "lanczos",
+                ["method"] = "stretch",
+                ["conditions"] = "always",
+                ["multiple_of"] = 0,
+                ["image"] = new object[] { "88", 0 }
+            });
+
+            workflow["92"] = MakeNode("Hy3DBakeFromMultiview", new Dictionary<string, object>
+            {
+                ["images"] = new object[] { "117", 0 },
+                ["renderer"] = new object[] { "79", 0 },
+                ["camera_config"] = new object[] { "61", 0 }
+            });
+
+            // === Stage 12: Inpaint & Apply Texture ===
+            workflow["129"] = MakeNode("Hy3DMeshVerticeInpaintTexture", new Dictionary<string, object>
+            {
+                ["texture"] = new object[] { "92", 0 },
+                ["mask"] = new object[] { "92", 1 },
+                ["renderer"] = new object[] { "79", 0 }
+            });
+
+            workflow["104"] = MakeNode("CV2InpaintTexture", new Dictionary<string, object>
+            {
+                ["inpaint_radius"] = 3,
+                ["inpaint_method"] = "ns",
+                ["texture"] = new object[] { "129", 0 },
+                ["mask"] = new object[] { "129", 1 }
+            });
+
+            workflow["98"] = MakeNode("Hy3DApplyTexture", new Dictionary<string, object>
+            {
+                ["texture"] = new object[] { "104", 0 },
+                ["renderer"] = new object[] { "79", 0 }
+            });
+
+            // === Stage 13b: Export textured mesh ===
+            workflow["99"] = MakeNode("Hy3DExportMesh", new Dictionary<string, object>
+            {
+                ["filename_prefix"] = "3D/Hy3D_textured",
+                ["file_format"] = "glb",
+                ["save_file"] = true,
+                ["trimesh"] = new object[] { "98", 0 }
+            });
+        }
+
+        return workflow;
+    }
+
+    #endregion
+
     #region Helper Methods
 
     /// <summary>

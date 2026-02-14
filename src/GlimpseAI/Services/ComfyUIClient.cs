@@ -1160,6 +1160,293 @@ public class ComfyUIClient : IDisposable
 
     #endregion
 
+    #region Hunyuan3D Mesh Generation
+
+    /// <summary>
+    /// Whether Hunyuan3D nodes are available in ComfyUI.
+    /// Set during model detection.
+    /// </summary>
+    public bool IsHunyuan3DAvailable { get; set; }
+
+    /// <summary>
+    /// Checks if Hy3DModelLoader node exists in ComfyUI (indicates Hunyuan3D is installed).
+    /// </summary>
+    public async Task<bool> CheckHunyuan3DAvailableAsync()
+    {
+        try
+        {
+            var response = await _client.GetAsync("/object_info/Hy3DModelLoader");
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Generates a 3D mesh from an input image using the Hunyuan3D v2 pipeline.
+    /// Uploads the image, builds the workflow, queues, and waits for completion.
+    /// Returns the GLB filename from ComfyUI's output/3D/ folder.
+    /// </summary>
+    public async Task<MeshGenerationResult> GenerateMeshAsync(
+        byte[] inputImage, long seed, CancellationToken ct)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            // 1. Upload input image
+            var filename = await UploadImageAsync(
+                inputImage,
+                $"glimpse_mesh_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+
+            ct.ThrowIfCancellationRequested();
+
+            // 2. Build Hunyuan3D workflow
+            var workflow = WorkflowBuilder.BuildHunyuan3DMeshWorkflow(filename, seed, textured: true);
+
+            // 3. Queue prompt
+            var promptId = await QueuePromptAsync(workflow);
+
+            // 4. Wait for completion — use longer timeout for mesh generation
+            var originalTimeout = MaxWaitTime;
+            var meshTimeout = TimeSpan.FromMinutes(30); // Mesh generation can take 10-20 minutes
+
+            // Poll for completion with progress tracking
+            var deadline = DateTime.UtcNow + meshTimeout;
+
+            while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+            {
+                if (IsWebSocketConnected)
+                {
+                    // Use WebSocket for progress — same pattern as image generation
+                    // but we check for mesh output instead of image output
+                    var buffer = new byte[4 * 1024 * 1024];
+                    try
+                    {
+                        var segment = new ArraySegment<byte>(buffer);
+                        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30)); // 30s receive timeout
+
+                        var wsResult = await _ws.ReceiveAsync(segment, timeoutCts.Token);
+
+                        if (wsResult.MessageType == WebSocketMessageType.Text)
+                        {
+                            var text = Encoding.UTF8.GetString(buffer, 0, wsResult.Count);
+                            HandleTextMessage(text, promptId, out bool completed, out bool error);
+
+                            if (error)
+                            {
+                                return new MeshGenerationResult
+                                {
+                                    Success = false,
+                                    ErrorMessage = "ComfyUI reported an error during mesh generation.",
+                                    Elapsed = stopwatch.Elapsed
+                                };
+                            }
+
+                            if (completed)
+                            {
+                                // Get the output mesh filename from history
+                                var meshInfo = await GetMeshOutputInfoAsync(promptId);
+                                stopwatch.Stop();
+
+                                if (meshInfo == null)
+                                {
+                                    return new MeshGenerationResult
+                                    {
+                                        Success = false,
+                                        ErrorMessage = "Mesh generation completed but no output file found.",
+                                        Elapsed = stopwatch.Elapsed
+                                    };
+                                }
+
+                                return new MeshGenerationResult
+                                {
+                                    Success = true,
+                                    TexturedGlbFilename = meshInfo.Value.texturedFilename,
+                                    UntexturedGlbFilename = meshInfo.Value.untexturedFilename,
+                                    Subfolder = meshInfo.Value.subfolder,
+                                    Elapsed = stopwatch.Elapsed
+                                };
+                            }
+                        }
+                        else if (wsResult.MessageType == WebSocketMessageType.Binary && wsResult.Count > 8)
+                        {
+                            // Forward progress previews
+                            int eventType = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+                            if (eventType == 1 || eventType == 2)
+                            {
+                                var pngData = new byte[wsResult.Count - 8];
+                                Array.Copy(buffer, 8, pngData, 0, pngData.Length);
+                                PreviewImageReceived?.Invoke(this, new PreviewImageEventArgs { ImageData = pngData });
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // Receive timeout — just continue polling
+                        continue;
+                    }
+                }
+                else
+                {
+                    // HTTP polling fallback
+                    try
+                    {
+                        var response = await _client.GetAsync($"/history/{promptId}", ct);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var json = await response.Content.ReadAsStringAsync(ct);
+                            var root = JsonNode.Parse(json);
+
+                            if (root is JsonObject obj && obj.ContainsKey(promptId))
+                            {
+                                var outputs = root[promptId]?["outputs"];
+                                if (outputs is JsonObject outputNodes && outputNodes.Count > 0)
+                                {
+                                    var meshInfo = await GetMeshOutputInfoAsync(promptId);
+                                    stopwatch.Stop();
+
+                                    if (meshInfo == null)
+                                    {
+                                        return new MeshGenerationResult
+                                        {
+                                            Success = false,
+                                            ErrorMessage = "Mesh generation completed but no output file found.",
+                                            Elapsed = stopwatch.Elapsed
+                                        };
+                                    }
+
+                                    return new MeshGenerationResult
+                                    {
+                                        Success = true,
+                                        TexturedGlbFilename = meshInfo.Value.texturedFilename,
+                                        UntexturedGlbFilename = meshInfo.Value.untexturedFilename,
+                                        Subfolder = meshInfo.Value.subfolder,
+                                        Elapsed = stopwatch.Elapsed
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // Retry
+                    }
+
+                    await Task.Delay(2000, ct); // Poll every 2s for long-running mesh gen
+                }
+            }
+
+            if (ct.IsCancellationRequested)
+            {
+                try { _ = InterruptGenerationAsync(); } catch { }
+                return new MeshGenerationResult
+                {
+                    Success = false,
+                    ErrorMessage = "Mesh generation was cancelled.",
+                    Elapsed = stopwatch.Elapsed
+                };
+            }
+
+            return new MeshGenerationResult
+            {
+                Success = false,
+                ErrorMessage = "Mesh generation timed out (30 minutes).",
+                Elapsed = stopwatch.Elapsed
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            try { _ = InterruptGenerationAsync(); } catch { }
+            return new MeshGenerationResult
+            {
+                Success = false,
+                ErrorMessage = "Mesh generation was cancelled.",
+                Elapsed = stopwatch.Elapsed
+            };
+        }
+        catch (Exception ex)
+        {
+            return new MeshGenerationResult
+            {
+                Success = false,
+                ErrorMessage = $"Mesh generation failed: {ex.Message}",
+                Elapsed = stopwatch.Elapsed
+            };
+        }
+    }
+
+    /// <summary>
+    /// Extracts mesh output filenames from a completed prompt's history.
+    /// Looks for Hy3DExportMesh nodes (17 = untextured, 99 = textured).
+    /// </summary>
+    private async Task<(string texturedFilename, string untexturedFilename, string subfolder)?> GetMeshOutputInfoAsync(string promptId)
+    {
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(500);
+
+            try
+            {
+                var response = await _client.GetAsync($"/history/{promptId}");
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var json = await response.Content.ReadAsStringAsync();
+                var root = JsonNode.Parse(json);
+
+                if (root is not JsonObject obj || !obj.ContainsKey(promptId))
+                    continue;
+
+                var outputs = root[promptId]?["outputs"];
+                if (outputs is not JsonObject outputNodes)
+                    continue;
+
+                string texturedFilename = null;
+                string untexturedFilename = null;
+                string subfolder = "3D";
+
+                // Check node 99 (textured export)
+                var texturedOutput = outputNodes["99"];
+                if (texturedOutput != null)
+                {
+                    var meshFiles = texturedOutput["mesh"];
+                    if (meshFiles is JsonArray meshArr && meshArr.Count > 0)
+                    {
+                        texturedFilename = meshArr[0]?["filename"]?.GetValue<string>();
+                        subfolder = meshArr[0]?["subfolder"]?.GetValue<string>() ?? "3D";
+                    }
+                }
+
+                // Check node 17 (untextured export)
+                var untexturedOutput = outputNodes["17"];
+                if (untexturedOutput != null)
+                {
+                    var meshFiles = untexturedOutput["mesh"];
+                    if (meshFiles is JsonArray meshArr && meshArr.Count > 0)
+                    {
+                        untexturedFilename = meshArr[0]?["filename"]?.GetValue<string>();
+                    }
+                }
+
+                if (texturedFilename != null || untexturedFilename != null)
+                    return (texturedFilename, untexturedFilename, subfolder);
+            }
+            catch
+            {
+                // Retry
+            }
+        }
+
+        return null;
+    }
+
+    #endregion
+
     #region Florence2 Vision Support
 
     /// <summary>
@@ -1352,4 +1639,17 @@ public class ProgressEventArgs : EventArgs
 public class PreviewImageEventArgs : EventArgs
 {
     public byte[] ImageData { get; set; }
+}
+
+/// <summary>
+/// Result of a Hunyuan3D mesh generation operation.
+/// </summary>
+public class MeshGenerationResult
+{
+    public bool Success { get; set; }
+    public string ErrorMessage { get; set; }
+    public string TexturedGlbFilename { get; set; }
+    public string UntexturedGlbFilename { get; set; }
+    public string Subfolder { get; set; }
+    public TimeSpan Elapsed { get; set; }
 }

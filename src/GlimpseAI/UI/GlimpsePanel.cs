@@ -56,6 +56,7 @@ public class GlimpsePanel : Panel, IPanel
     // Buttons row
     private Button _generateButton;
     private Button _monochromeButton;
+    private Button _meshButton;
     private Button _autoToggleButton;
     private Button _saveButton;
     private Button _settingsButton;
@@ -430,6 +431,10 @@ public class GlimpsePanel : Panel, IPanel
         _monochromeButton = new Button { Text = "Monochrome", Enabled = false };
         _monochromeButton.Click += OnMonochromeClicked;
 
+        _meshButton = new Button { Text = "3D Mesh", Enabled = false };
+        _meshButton.ToolTip = "Requires Hunyuan3D custom nodes in ComfyUI";
+        _meshButton.Click += OnMeshClicked;
+
         _autoToggleButton = new Button { Text = "Auto" };
         _autoToggleButton.Click += OnAutoToggleClicked;
 
@@ -447,6 +452,7 @@ public class GlimpsePanel : Panel, IPanel
             {
                 new StackLayoutItem(_generateButton, expand: true),
                 new StackLayoutItem(_monochromeButton, expand: true),
+                new StackLayoutItem(_meshButton, expand: true),
                 new StackLayoutItem(_autoToggleButton, expand: true),
                 new StackLayoutItem(_saveButton, expand: true),
                 _settingsButton
@@ -528,6 +534,12 @@ public class GlimpsePanel : Panel, IPanel
                 _monochromeButton.ToolTip = "Convert preview to monochrome architectural model (Flux Kontext)";
             else
                 _monochromeButton.ToolTip = "Requires flux1-dev-kontext_fp8_scaled.safetensors in ComfyUI/models/unet/";
+
+            _meshButton.Enabled = _orchestrator.IsHunyuan3DAvailable;
+            if (_orchestrator.IsHunyuan3DAvailable)
+                _meshButton.ToolTip = "Generate 3D mesh from image using Hunyuan3D v2 (auto-imports GLB into Rhino)";
+            else
+                _meshButton.ToolTip = "Requires Hunyuan3D custom nodes in ComfyUI";
         });
     }
 
@@ -583,6 +595,7 @@ public class GlimpsePanel : Panel, IPanel
         {
             _generateButton.Enabled = !busy;
             _monochromeButton.Enabled = !busy && (_orchestrator?.IsKontextAvailable ?? false);
+            _meshButton.Enabled = !busy && (_orchestrator?.IsHunyuan3DAvailable ?? false);
             _presetDropDown.Enabled = !busy;
             _modelDropDown.Enabled = !busy;
             _denoiseSlider.Enabled = !busy;
@@ -717,6 +730,64 @@ public class GlimpsePanel : Panel, IPanel
         fromViewport.Click += (s, a) =>
         {
             _orchestrator.RequestMonochromeGeneration(null);
+        };
+
+        menu.Items.Add(fromPreview);
+        menu.Items.Add(fromFile);
+        menu.Items.Add(fromViewport);
+        menu.Show();
+    }
+
+    private void OnMeshClicked(object sender, EventArgs e)
+    {
+        // Show context menu: use preview, load file, or capture viewport
+        var menu = new ContextMenu();
+
+        var fromPreview = new ButtonMenuItem { Text = "From Preview Image" };
+        fromPreview.Enabled = _currentPreviewBitmap != null;
+        fromPreview.Click += (s, a) =>
+        {
+            byte[] img = null;
+            try
+            {
+                using var ms = new MemoryStream();
+                _currentPreviewBitmap.Save(ms, ImageFormat.Png);
+                img = ms.ToArray();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Failed to extract preview: {ex.Message}");
+            }
+            _orchestrator.RequestMeshGeneration(img);
+        };
+
+        var fromFile = new ButtonMenuItem { Text = "Load Image..." };
+        fromFile.Click += (s, a) =>
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Select Image for 3D Mesh Generation",
+                Filters = { new FileFilter("Images", ".png", ".jpg", ".jpeg", ".bmp", ".webp") }
+            };
+            if (dialog.ShowDialog(this) == DialogResult.Ok)
+            {
+                try
+                {
+                    var img = File.ReadAllBytes(dialog.FileName);
+                    RhinoApp.WriteLine($"Glimpse AI: Loaded image for mesh: {dialog.FileName}");
+                    _orchestrator.RequestMeshGeneration(img);
+                }
+                catch (Exception ex)
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Failed to load image: {ex.Message}");
+                }
+            }
+        };
+
+        var fromViewport = new ButtonMenuItem { Text = "From Viewport" };
+        fromViewport.Click += (s, a) =>
+        {
+            _orchestrator.RequestMeshGeneration(null);
         };
 
         menu.Items.Add(fromPreview);

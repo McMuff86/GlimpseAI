@@ -20,9 +20,11 @@ public class GlimpseOrchestrator : IDisposable
     private bool _disposed;
     private bool _isFluxAvailable;
     private bool _isKontextAvailable;
+    private bool _isHunyuan3DAvailable;
     private bool _useFlux;
     public bool IsUsingFlux => _useFlux;
     public bool IsKontextAvailable => _isKontextAvailable;
+    public bool IsHunyuan3DAvailable => _isHunyuan3DAvailable;
 
     /// <summary>Available checkpoint models (SDXL/SD1.5) from ComfyUI.</summary>
     public System.Collections.Generic.List<string> AvailableCheckpoints { get; private set; } = new();
@@ -115,6 +117,11 @@ public class GlimpseOrchestrator : IDisposable
 
             _isFluxAvailable = await _comfyClient.IsFluxAvailableAsync();
             
+            // Detect Hunyuan3D availability
+            _isHunyuan3DAvailable = await _comfyClient.CheckHunyuan3DAvailableAsync();
+            _comfyClient.IsHunyuan3DAvailable = _isHunyuan3DAvailable;
+            RhinoApp.WriteLine($"Glimpse AI: Hunyuan3D available: {_isHunyuan3DAvailable}");
+
             // Detect Kontext model availability
             _isKontextAvailable = await _comfyClient.CheckKontextAvailableAsync();
             _comfyClient.IsKontextAvailable = _isKontextAvailable;
@@ -285,6 +292,118 @@ public class GlimpseOrchestrator : IDisposable
             {
                 RenderCompleted?.Invoke(this,
                     RenderResult.Fail($"Monochrome generation error: {ex.Message}", TimeSpan.Zero));
+            }
+            finally
+            {
+                BusyChanged?.Invoke(this, false);
+            }
+        }, ct);
+    }
+
+    /// <summary>
+    /// Generates a 3D mesh from an input image using Hunyuan3D v2.
+    /// If no input image is provided, captures the current viewport.
+    /// After generation, auto-imports the GLB into Rhino.
+    /// </summary>
+    public void RequestMeshGeneration(byte[] inputImage)
+    {
+        if (!_isHunyuan3DAvailable)
+        {
+            RenderCompleted?.Invoke(this,
+                RenderResult.Fail("Hunyuan3D nodes not found. Install ComfyUI-Hunyuan3D custom nodes.", TimeSpan.Zero));
+            return;
+        }
+
+        // If no input image, capture viewport
+        if (inputImage == null || inputImage.Length == 0)
+        {
+            var capture = CaptureCurrentViewport(PresetType.HighQuality);
+            inputImage = capture.viewportImage;
+            if (inputImage == null)
+            {
+                RenderCompleted?.Invoke(this,
+                    RenderResult.Fail("No preview image available and failed to capture viewport.", TimeSpan.Zero));
+                return;
+            }
+        }
+
+        CancelCurrentGeneration();
+        _currentGenerationCts = new CancellationTokenSource();
+        var ct = _currentGenerationCts.Token;
+        var imageToProcess = inputImage;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                BusyChanged?.Invoke(this, true);
+                StatusChanged?.Invoke(this, "Generating 3D mesh… (this may take several minutes)");
+
+                // Ensure WebSocket is connected
+                if (!_comfyClient.IsWebSocketConnected)
+                {
+                    try { await _comfyClient.ConnectWebSocketAsync(ct); } catch { }
+                }
+
+                var seed = Random.Shared.NextInt64();
+                var result = await _comfyClient.GenerateMeshAsync(imageToProcess, seed, ct);
+
+                if (result.Success)
+                {
+                    var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+                    var glbFilename = result.TexturedGlbFilename ?? result.UntexturedGlbFilename;
+
+                    if (!string.IsNullOrEmpty(glbFilename))
+                    {
+                        // Construct full Windows path for Rhino import
+                        var glbPath = System.IO.Path.Combine(
+                            settings.ComfyUIOutputPath,
+                            result.Subfolder ?? "3D",
+                            glbFilename);
+
+                        RhinoApp.WriteLine($"Glimpse AI: Mesh generated: {glbPath}");
+                        RhinoApp.WriteLine($"Glimpse AI: Mesh generation completed in {result.Elapsed.TotalSeconds:F1}s");
+
+                        // Auto-import GLB into Rhino on UI thread
+                        RhinoApp.InvokeOnUiThread(new Action(() =>
+                        {
+                            try
+                            {
+                                RhinoApp.RunScript($"_-Import \"{glbPath}\" _Enter", false);
+                                RhinoApp.WriteLine($"Glimpse AI: GLB imported into Rhino: {glbFilename}");
+                            }
+                            catch (Exception ex)
+                            {
+                                RhinoApp.WriteLine($"Glimpse AI: Failed to import GLB: {ex.Message}");
+                            }
+                        }));
+
+                        StatusChanged?.Invoke(this, $"Mesh generated in {result.Elapsed.TotalSeconds:F0}s — imported into Rhino");
+                    }
+                    else
+                    {
+                        StatusChanged?.Invoke(this, $"Mesh generated in {result.Elapsed.TotalSeconds:F0}s (no output file found)");
+                    }
+
+                    // Signal completion (no image data for mesh, but report success)
+                    RenderCompleted?.Invoke(this,
+                        RenderResult.Ok(null, glbFilename ?? "mesh", result.Elapsed, PresetType.HighQuality, 0, "Hunyuan3D"));
+                }
+                else
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Mesh generation failed: {result.ErrorMessage}");
+                    RenderCompleted?.Invoke(this,
+                        RenderResult.Fail(result.ErrorMessage, result.Elapsed));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                StatusChanged?.Invoke(this, "Mesh generation cancelled");
+            }
+            catch (Exception ex)
+            {
+                RenderCompleted?.Invoke(this,
+                    RenderResult.Fail($"Mesh generation error: {ex.Message}", TimeSpan.Zero));
             }
             finally
             {

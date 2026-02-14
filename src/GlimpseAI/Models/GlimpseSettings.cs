@@ -85,6 +85,9 @@ public class GlimpseSettings
     /// <summary>Flux ControlNet model (typically InstantX_FLUX.1-dev-Controlnet-Union.safetensors).</summary>
     public string FluxControlNetModel { get; set; } = "";
 
+    /// <summary>ComfyUI output directory path (Windows path for GLB import into Rhino).</summary>
+    public string ComfyUIOutputPath { get; set; } = @"C:\Users\Adi.Muff\repos\ComfyUI_windows_portable\ComfyUI\output";
+
     /// <summary>Serialize to JSON string.</summary>
     public string ToJson()
     {
