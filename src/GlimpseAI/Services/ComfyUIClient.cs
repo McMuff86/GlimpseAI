@@ -247,21 +247,67 @@ public class ComfyUIClient : IDisposable
 
     #region WebSocket Connection
 
+    private int _reconnectAttempts = 0;
+    private const int MaxReconnectAttempts = 3;
+    private static readonly TimeSpan[] ReconnectDelays = {
+        TimeSpan.FromMilliseconds(500),  // First retry: 500ms
+        TimeSpan.FromSeconds(2),         // Second retry: 2s  
+        TimeSpan.FromSeconds(5)          // Third retry: 5s
+    };
+
     /// <summary>
-    /// Connects to the ComfyUI WebSocket endpoint.
+    /// Connects to the ComfyUI WebSocket endpoint with automatic retry logic.
     /// </summary>
     public async Task ConnectWebSocketAsync(CancellationToken ct = default)
     {
         if (_ws != null && _ws.State == WebSocketState.Open)
             return;
 
-        _ws?.Dispose();
-        _ws = new ClientWebSocket();
-
         var wsUrl = _baseUrl.Replace("http://", "ws://").Replace("https://", "wss://");
         var uri = new Uri($"{wsUrl}/ws?clientId={_clientId}");
 
-        await _ws.ConnectAsync(uri, ct);
+        for (int attempt = 0; attempt <= MaxReconnectAttempts; attempt++)
+        {
+            try
+            {
+                _ws?.Dispose();
+                _ws = new ClientWebSocket();
+
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(10)); // 10s connection timeout
+
+                await _ws.ConnectAsync(uri, timeoutCts.Token);
+                _reconnectAttempts = 0; // Reset counter on successful connection
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // Don't retry if externally cancelled
+            }
+            catch (Exception ex)
+            {
+                _ws?.Dispose();
+                _ws = null;
+
+                if (attempt == MaxReconnectAttempts)
+                {
+                    Rhino.RhinoApp.WriteLine($"Glimpse AI: WebSocket connection failed after {MaxReconnectAttempts + 1} attempts: {ex.Message}");
+                    throw;
+                }
+
+                var delay = ReconnectDelays[Math.Min(attempt, ReconnectDelays.Length - 1)];
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: WebSocket connection failed (attempt {attempt + 1}/{MaxReconnectAttempts + 1}), retrying in {delay.TotalSeconds}s: {ex.Message}");
+                
+                try
+                {
+                    await Task.Delay(delay, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Don't continue retrying if cancelled
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -450,6 +496,24 @@ public class ComfyUIClient : IDisposable
                 catch (WebSocketException ex)
                 {
                     Rhino.RhinoApp.WriteLine($"Glimpse AI: WebSocket error: {ex.Message}");
+                    
+                    // Attempt to reconnect once before falling back to polling
+                    if (_reconnectAttempts < 1)
+                    {
+                        _reconnectAttempts++;
+                        Rhino.RhinoApp.WriteLine("Glimpse AI: Attempting WebSocket reconnection...");
+                        
+                        try
+                        {
+                            await ConnectWebSocketAsync(ct);
+                            continue; // Retry the receive loop
+                        }
+                        catch
+                        {
+                            Rhino.RhinoApp.WriteLine("Glimpse AI: WebSocket reconnection failed, falling back to HTTP polling");
+                        }
+                    }
+                    
                     return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
                 }
 
