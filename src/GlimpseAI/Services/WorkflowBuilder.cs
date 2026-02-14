@@ -650,6 +650,15 @@ public static class WorkflowBuilder
                 ["control_net_name"] = controlNetModel
             }),
 
+            // Node 13: SetUnionControlNetType - set to depth mode for viewport structure preservation
+            ["13"] = MakeNode("SetUnionControlNetType", new Dictionary<string, object>
+            {
+                ["type"] = "depth"
+            }, new Dictionary<string, object>
+            {
+                ["control_net"] = new object[] { "6", 0 }
+            }),
+
             // Node 7: Empty conditioning for negative (required by Flux)
             ["7"] = MakeNode("CLIPTextEncode", new Dictionary<string, object>
             {
@@ -669,7 +678,7 @@ public static class WorkflowBuilder
             {
                 ["positive"] = new object[] { "4", 0 },
                 ["negative"] = new object[] { "7", 0 },
-                ["control_net"] = new object[] { "6", 0 },
+                ["control_net"] = new object[] { "13", 0 },  // Use typed ControlNet
                 ["image"] = new object[] { "5", 0 },
                 ["vae"] = new object[] { "3", 0 }
             }),
