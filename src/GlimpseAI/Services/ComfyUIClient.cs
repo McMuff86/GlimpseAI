@@ -1031,6 +1031,17 @@ public class ComfyUIClient : IDisposable
                 "InstantX-FLUX"
             };
 
+            // First pass: prefer models NOT in subfolders (direct files)
+            foreach (var pref in preferred)
+            {
+                var match = fluxControlNets.FirstOrDefault(cn =>
+                    cn.Contains(pref, StringComparison.OrdinalIgnoreCase) &&
+                    !cn.Contains("\\") && !cn.Contains("/"));
+                if (match != null)
+                    return match;
+            }
+
+            // Second pass: accept subfolder paths too
             foreach (var pref in preferred)
             {
                 var match = fluxControlNets.FirstOrDefault(cn =>
