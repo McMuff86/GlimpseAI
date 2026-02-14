@@ -659,7 +659,7 @@ public static class WorkflowBuilder
                 ["clip"] = new object[] { "2", 0 }
             }),
 
-            // Node 8: ControlNetApplyAdvanced
+            // Node 8: ControlNetApplyAdvanced (InstantX Union requires VAE input)
             ["8"] = MakeNode("ControlNetApplyAdvanced", new Dictionary<string, object>
             {
                 ["strength"] = actualStrength,
@@ -670,7 +670,8 @@ public static class WorkflowBuilder
                 ["positive"] = new object[] { "4", 0 },
                 ["negative"] = new object[] { "7", 0 },
                 ["control_net"] = new object[] { "6", 0 },
-                ["image"] = new object[] { "5", 0 }
+                ["image"] = new object[] { "5", 0 },
+                ["vae"] = new object[] { "3", 0 }
             }),
 
             // Node 9: EmptyLatentImage (Flux generates completely new content)
