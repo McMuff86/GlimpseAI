@@ -13,13 +13,22 @@ Powered by Stable Diffusion and Flux via ComfyUI.
 
 ## ✨ Features
 
+### ✅ **Working (Stable)**
 - **One-Click Rendering** – Generate AI renderings from any Rhino viewport
-- **Live Preview** – Auto-generates when you move the camera (with smart debouncing)
 - **Multiple Presets** – Fast (1-2s), Balanced (5-8s), High Quality (20-30s), 4K Export (45-60s)
-- **Smart Prompts** – Auto-generates prompts from scene materials (wood, glass, concrete, metal)
 - **Local Processing** – Runs on your GPU, no cloud costs, no subscriptions
-- **Rhino Integration** – Native dockable panel via Eto.Forms, no separate windows
-- **Depth-Aware** – Uses viewport depth information for ControlNet-guided generation
+- **Rhino Integration** – Native dockable panel via Eto.Forms
+- **WebSocket + HTTP Fallback** – Robust ComfyUI communication
+- **Real-time Overlay** – AI results displayed directly in viewport
+- **Thread-Safe Architecture** – No more crashes from UI thread violations
+
+### 🚧 **In Development** 
+- **Live Preview** – Auto-generates when you move the camera *(viewport watcher implemented, needs stability testing)*
+- **Smart Prompts** – Auto-generates prompts from scene materials *(planned)*
+- **Advanced Depth Processing** – Enhanced depth capture without display mode switching *(in progress)*
+
+### 🔬 **Experimental**
+- **Depth-Aware Generation** – Uses viewport depth via Arctic mode *(functional but can cause viewport flickering)*
 
 ---
 
