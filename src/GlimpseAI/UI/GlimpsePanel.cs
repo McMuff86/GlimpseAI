@@ -31,6 +31,7 @@ public class GlimpsePanel : Panel, IPanel
     private Label _stylePresetLabel;
 
     // Controls row
+    private DropDown _pipelineDropDown;
     private DropDown _presetDropDown;
     private Slider _denoiseSlider;
     private TextBox _denoiseValueBox;
@@ -264,6 +265,20 @@ public class GlimpsePanel : Panel, IPanel
         _presetDropDown.SelectedIndex = (int)settings.ActivePreset;
         _presetDropDown.SelectedIndexChanged += OnPresetChanged;
 
+        // Pipeline dropdown
+        _pipelineDropDown = new DropDown();
+        _pipelineDropDown.Items.Add("Auto");
+        _pipelineDropDown.Items.Add("Flux");
+        _pipelineDropDown.Items.Add("SDXL");
+        var pipelineIndex = settings.PreferredPipeline switch
+        {
+            "flux" => 1,
+            "sdxl" => 2,
+            _ => 0
+        };
+        _pipelineDropDown.SelectedIndex = pipelineIndex;
+        _pipelineDropDown.SelectedIndexChanged += OnPipelineChanged;
+
         // Denoise slider (0-100 mapped to 0.1-1.0)
         int sliderValue = (int)((settings.DenoiseStrength - 0.1) / 0.9 * 100);
         _denoiseSlider = new Slider
@@ -318,6 +333,8 @@ public class GlimpsePanel : Panel, IPanel
             {
                 new Label { Text = "Preset:" },
                 _presetDropDown,
+                new Label { Text = "Pipeline:" },
+                _pipelineDropDown,
                 new Label { Text = "Denoise:" },
                 _denoiseSlider,
                 _denoiseValueBox,
@@ -706,6 +723,19 @@ public class GlimpsePanel : Panel, IPanel
         }
     }
 
+    private void OnPipelineChanged(object sender, EventArgs e)
+    {
+        var pipeline = _pipelineDropDown.SelectedIndex switch
+        {
+            1 => "flux",
+            2 => "sdxl",
+            _ => "auto"
+        };
+        var settings = GetSettings();
+        settings.PreferredPipeline = pipeline;
+        GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
+    }
+
     private void OnDenoiseSliderChanged(object sender, EventArgs e)
     {
         if (_updatingFromTextBox) return;
@@ -985,6 +1015,12 @@ public class GlimpsePanel : Panel, IPanel
         _cfgValueBox.Text = settings.CfgScale.ToString("F1");
 
         // Update other controls
+        _pipelineDropDown.SelectedIndex = settings.PreferredPipeline switch
+        {
+            "flux" => 1,
+            "sdxl" => 2,
+            _ => 0
+        };
         _presetDropDown.SelectedIndex = (int)settings.ActivePreset;
         _promptModeDropDown.SelectedIndex = (int)settings.PromptMode;
         _stylePresetDropDown.SelectedIndex = (int)settings.StylePreset;

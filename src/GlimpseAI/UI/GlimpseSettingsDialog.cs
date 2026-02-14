@@ -38,23 +38,57 @@ public class GlimpseSettingsDialog : Dialog
     private Label _stylePresetLabel;
     private Label _customStyleLabel;
 
+    // Dark theme colors
+    private static readonly Color DarkBg = Color.FromArgb(45, 45, 48);
+    private static readonly Color DarkInputBg = Color.FromArgb(62, 62, 66);
+    private static readonly Color DarkText = Color.FromArgb(204, 204, 204);
+    private static readonly Color DarkInputText = Color.FromArgb(255, 255, 255);
+    private static readonly Color DarkHeaderText = Color.FromArgb(255, 255, 255);
+
     public GlimpseSettingsDialog()
     {
         Title = "Glimpse AI Settings";
         MinimumSize = new Size(450, 520);
         Resizable = true;
         Padding = new Padding(0);
+        BackgroundColor = DarkBg;
 
         Content = BuildUI();
         LoadCurrentSettings();
     }
 
+    /// <summary>Helper to create a dark-themed label.</summary>
+    private Label DarkLabel(string text) => new Label { Text = text, TextColor = DarkText };
+
+    /// <summary>Helper to create a dark-themed section header.</summary>
+    private Label DarkHeader(string text) => new Label { Text = text, TextColor = DarkHeaderText, Font = SystemFonts.Bold() };
+
+    /// <summary>Applies dark theme to a TextBox.</summary>
+    private void StyleTextBox(TextBox tb) { tb.BackgroundColor = DarkInputBg; tb.TextColor = DarkInputText; }
+
+    /// <summary>Applies dark theme to a TextArea.</summary>
+    private void StyleTextArea(TextArea ta) { ta.BackgroundColor = DarkInputBg; ta.TextColor = DarkInputText; }
+
+    /// <summary>Applies dark theme to a DropDown.</summary>
+    private void StyleDropDown(DropDown dd) { dd.BackgroundColor = DarkInputBg; dd.TextColor = DarkInputText; }
+
+    /// <summary>Applies dark theme to a NumericStepper.</summary>
+    private void StyleStepper(NumericStepper ns) { ns.BackgroundColor = DarkInputBg; ns.TextColor = DarkInputText; }
+
+    /// <summary>Applies dark theme to a CheckBox.</summary>
+    private void StyleCheckBox(CheckBox cb) { cb.TextColor = DarkText; }
+
+    /// <summary>Applies dark theme to a Button.</summary>
+    private void StyleButton(Button btn) { btn.BackgroundColor = DarkInputBg; btn.TextColor = DarkText; }
+
     private Control BuildUI()
     {
         // --- ComfyUI Connection ---
         _comfyUrlTextBox = new TextBox();
+        StyleTextBox(_comfyUrlTextBox);
 
         _testConnectionButton = new Button { Text = "Test Connection", Width = 120 };
+        StyleButton(_testConnectionButton);
         _testConnectionButton.Click += OnTestConnectionClicked;
 
         _connectionStatusLabel = new Label
@@ -81,9 +115,11 @@ public class GlimpseSettingsDialog : Dialog
         _presetDropDown = new DropDown();
         foreach (var preset in Enum.GetValues(typeof(PresetType)))
             _presetDropDown.Items.Add(preset.ToString());
+        StyleDropDown(_presetDropDown);
 
         // --- Auto Generate ---
         _autoGenerateCheckBox = new CheckBox { Text = "Auto-generate on viewport change" };
+        StyleCheckBox(_autoGenerateCheckBox);
 
         // --- Debounce ---
         _debounceStepper = new NumericStepper
@@ -93,6 +129,7 @@ public class GlimpseSettingsDialog : Dialog
             Increment = 50,
             DecimalPlaces = 0
         };
+        StyleStepper(_debounceStepper);
 
         // --- Default Prompt ---
         _defaultPromptTextArea = new TextArea
@@ -101,6 +138,7 @@ public class GlimpseSettingsDialog : Dialog
             Wrap = true,
             SpellCheck = false
         };
+        StyleTextArea(_defaultPromptTextArea);
 
         // --- Denoise Strength ---
         _denoiseStepper = new NumericStepper
@@ -110,6 +148,7 @@ public class GlimpseSettingsDialog : Dialog
             Increment = 0.05,
             DecimalPlaces = 2
         };
+        StyleStepper(_denoiseStepper);
 
         // --- Capture Resolution ---
         _captureWidthStepper = new NumericStepper
@@ -119,6 +158,7 @@ public class GlimpseSettingsDialog : Dialog
             Increment = 64,
             DecimalPlaces = 0
         };
+        StyleStepper(_captureWidthStepper);
         _captureHeightStepper = new NumericStepper
         {
             MinValue = 128,
@@ -126,6 +166,7 @@ public class GlimpseSettingsDialog : Dialog
             Increment = 64,
             DecimalPlaces = 0
         };
+        StyleStepper(_captureHeightStepper);
 
         var resolutionRow = new StackLayout
         {
@@ -135,14 +176,15 @@ public class GlimpseSettingsDialog : Dialog
             Items =
             {
                 _captureWidthStepper,
-                new Label { Text = "×", VerticalAlignment = VerticalAlignment.Center },
+                new Label { Text = "×", TextColor = DarkText, VerticalAlignment = VerticalAlignment.Center },
                 _captureHeightStepper,
-                new Label { Text = "px", TextColor = Colors.Gray, VerticalAlignment = VerticalAlignment.Center }
+                new Label { Text = "px", TextColor = DarkText, VerticalAlignment = VerticalAlignment.Center }
             }
         };
 
         // --- ControlNet Settings ---
         _useControlNetCheckBox = new CheckBox { Text = "Use ControlNet for depth-guided generation (Balanced/HQ/4K only)" };
+        StyleCheckBox(_useControlNetCheckBox);
         
         _controlNetStrengthStepper = new NumericStepper
         {
@@ -152,16 +194,19 @@ public class GlimpseSettingsDialog : Dialog
             DecimalPlaces = 2,
             Value = 0.7
         };
+        StyleStepper(_controlNetStrengthStepper);
 
         _controlNetModelTextBox = new TextBox 
         { 
             PlaceholderText = "Auto-detect (leave empty for auto-detection)"
         };
+        StyleTextBox(_controlNetModelTextBox);
 
         _useDepthPreprocessorCheckBox = new CheckBox 
         { 
             Text = "Use depth preprocessor (DepthAnything_V2)"
         };
+        StyleCheckBox(_useDepthPreprocessorCheckBox);
 
         // --- Auto-Prompt Settings ---
         _promptModeDropDown = new DropDown();
@@ -169,8 +214,9 @@ public class GlimpseSettingsDialog : Dialog
         _promptModeDropDown.Items.Add("Auto Basic");
         _promptModeDropDown.Items.Add("Auto Vision");
         _promptModeDropDown.SelectedIndexChanged += OnPromptModeChanged;
+        StyleDropDown(_promptModeDropDown);
 
-        _stylePresetLabel = new Label { Text = "Style Preset:" };
+        _stylePresetLabel = new Label { Text = "Style Preset:", TextColor = DarkText };
         
         _stylePresetDropDown = new DropDown();
         _stylePresetDropDown.Items.Add("Architecture");
@@ -182,8 +228,9 @@ public class GlimpseSettingsDialog : Dialog
         _stylePresetDropDown.Items.Add("Interior");
         _stylePresetDropDown.Items.Add("Custom");
         _stylePresetDropDown.SelectedIndexChanged += OnStylePresetChanged;
+        StyleDropDown(_stylePresetDropDown);
 
-        _customStyleLabel = new Label { Text = "Custom Style Suffix:" };
+        _customStyleLabel = new Label { Text = "Custom Style Suffix:", TextColor = DarkText };
         
         _customStyleSuffixTextArea = new TextArea
         {
@@ -191,12 +238,15 @@ public class GlimpseSettingsDialog : Dialog
             Wrap = true,
             SpellCheck = false
         };
+        StyleTextArea(_customStyleSuffixTextArea);
 
         // --- Buttons ---
         var okButton = new Button { Text = "OK" };
+        StyleButton(okButton);
         okButton.Click += OnOkClicked;
 
         var cancelButton = new Button { Text = "Cancel" };
+        StyleButton(cancelButton);
         cancelButton.Click += (s, e) => Close();
 
         DefaultButton = okButton;
@@ -206,29 +256,30 @@ public class GlimpseSettingsDialog : Dialog
         var layout = new DynamicLayout
         {
             DefaultSpacing = new Size(8, 6),
-            Padding = new Padding(16)
+            Padding = new Padding(16),
+            BackgroundColor = DarkBg
         };
 
         layout.BeginVertical();
 
-        layout.AddRow(new Label { Text = "ComfyUI Server", Font = SystemFonts.Bold() });
-        layout.AddRow(new Label { Text = "URL:" });
+        layout.AddRow(DarkHeader("ComfyUI Server"));
+        layout.AddRow(DarkLabel("URL:"));
         layout.AddRow(urlRow);
 
         layout.AddSpace();
 
-        layout.AddRow(new Label { Text = "Generation Defaults", Font = SystemFonts.Bold() });
-        layout.AddRow(new Label { Text = "Default Preset:" });
+        layout.AddRow(DarkHeader("Generation Defaults"));
+        layout.AddRow(DarkLabel("Default Preset:"));
         layout.AddRow(_presetDropDown);
-        layout.AddRow(new Label { Text = "Default Prompt:" });
+        layout.AddRow(DarkLabel("Default Prompt:"));
         layout.AddRow(_defaultPromptTextArea);
-        layout.AddRow(new Label { Text = "Denoise Strength:" });
+        layout.AddRow(DarkLabel("Denoise Strength:"));
         layout.AddRow(_denoiseStepper);
 
         layout.AddSpace();
 
-        layout.AddRow(new Label { Text = "Auto-Prompt", Font = SystemFonts.Bold() });
-        layout.AddRow(new Label { Text = "Prompt Mode:" });
+        layout.AddRow(DarkHeader("Auto-Prompt"));
+        layout.AddRow(DarkLabel("Prompt Mode:"));
         layout.AddRow(_promptModeDropDown);
         layout.AddRow(_stylePresetLabel);
         layout.AddRow(_stylePresetDropDown);
@@ -237,24 +288,24 @@ public class GlimpseSettingsDialog : Dialog
 
         layout.AddSpace();
 
-        layout.AddRow(new Label { Text = "Viewport Watcher", Font = SystemFonts.Bold() });
+        layout.AddRow(DarkHeader("Viewport Watcher"));
         layout.AddRow(_autoGenerateCheckBox);
-        layout.AddRow(new Label { Text = "Debounce (ms):" });
+        layout.AddRow(DarkLabel("Debounce (ms):"));
         layout.AddRow(_debounceStepper);
 
         layout.AddSpace();
 
-        layout.AddRow(new Label { Text = "ControlNet (Advanced)", Font = SystemFonts.Bold() });
+        layout.AddRow(DarkHeader("ControlNet (Advanced)"));
         layout.AddRow(_useControlNetCheckBox);
-        layout.AddRow(new Label { Text = "ControlNet Strength:" });
+        layout.AddRow(DarkLabel("ControlNet Strength:"));
         layout.AddRow(_controlNetStrengthStepper);
-        layout.AddRow(new Label { Text = "ControlNet Model (optional):" });
+        layout.AddRow(DarkLabel("ControlNet Model (optional):"));
         layout.AddRow(_controlNetModelTextBox);
         layout.AddRow(_useDepthPreprocessorCheckBox);
 
         layout.AddSpace();
 
-        layout.AddRow(new Label { Text = "Capture Resolution", Font = SystemFonts.Bold() });
+        layout.AddRow(DarkHeader("Capture Resolution"));
         layout.AddRow(resolutionRow);
 
         layout.EndVertical();

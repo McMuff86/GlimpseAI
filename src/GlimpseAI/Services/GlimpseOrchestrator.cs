@@ -97,10 +97,37 @@ public class GlimpseOrchestrator : IDisposable
         {
             _isFluxAvailable = await _comfyClient.IsFluxAvailableAsync();
             var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+            var preferred = settings.PreferredPipeline ?? "auto";
 
-            if (_isFluxAvailable && settings.PreferFlux)
+            // Handle explicit pipeline selection
+            if (preferred == "sdxl")
             {
-                RhinoApp.WriteLine("Glimpse AI: Flux models detected - using Flux pipeline");
+                RhinoApp.WriteLine("Glimpse AI: Pipeline forced to SDXL by user preference");
+                _useFlux = false;
+                return;
+            }
+
+            bool shouldUseFlux;
+            if (preferred == "flux")
+            {
+                if (!_isFluxAvailable)
+                {
+                    RhinoApp.WriteLine("Glimpse AI: ERROR - Flux pipeline selected but Flux models not available! Falling back to SDXL.");
+                    _useFlux = false;
+                    return;
+                }
+                RhinoApp.WriteLine("Glimpse AI: Pipeline forced to Flux by user preference");
+                shouldUseFlux = true;
+            }
+            else
+            {
+                // Auto mode: prefer Flux if available and PreferFlux is true
+                shouldUseFlux = _isFluxAvailable && settings.PreferFlux;
+            }
+
+            if (shouldUseFlux)
+            {
+                RhinoApp.WriteLine("Glimpse AI: Using Flux pipeline");
                 _useFlux = true;
                 
                 // Auto-detect and save Flux models if not already configured
