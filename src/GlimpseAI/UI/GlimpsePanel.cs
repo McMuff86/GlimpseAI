@@ -669,23 +669,60 @@ public class GlimpsePanel : Panel, IPanel
 
     private void OnMonochromeClicked(object sender, EventArgs e)
     {
-        // Use current preview image if available, otherwise null (orchestrator will capture viewport)
-        byte[] inputImage = null;
-        if (_currentPreviewBitmap != null)
+        // Show context menu: use preview, load file, or capture viewport
+        var menu = new ContextMenu();
+
+        var fromPreview = new ButtonMenuItem { Text = "From Preview Image" };
+        fromPreview.Enabled = _currentPreviewBitmap != null;
+        fromPreview.Click += (s, a) =>
         {
+            byte[] img = null;
             try
             {
                 using var ms = new MemoryStream();
                 _currentPreviewBitmap.Save(ms, ImageFormat.Png);
-                inputImage = ms.ToArray();
+                img = ms.ToArray();
             }
             catch (Exception ex)
             {
-                RhinoApp.WriteLine($"Glimpse AI: Failed to extract preview image: {ex.Message}");
+                RhinoApp.WriteLine($"Glimpse AI: Failed to extract preview: {ex.Message}");
             }
-        }
+            _orchestrator.RequestMonochromeGeneration(img);
+        };
 
-        _orchestrator.RequestMonochromeGeneration(inputImage);
+        var fromFile = new ButtonMenuItem { Text = "Load Image..." };
+        fromFile.Click += (s, a) =>
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Select Image for Monochrome Conversion",
+                Filters = { new FileFilter("Images", ".png", ".jpg", ".jpeg", ".bmp", ".webp") }
+            };
+            if (dialog.ShowDialog(this) == DialogResult.Ok)
+            {
+                try
+                {
+                    var img = File.ReadAllBytes(dialog.FileName);
+                    RhinoApp.WriteLine($"Glimpse AI: Loaded image: {dialog.FileName}");
+                    _orchestrator.RequestMonochromeGeneration(img);
+                }
+                catch (Exception ex)
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Failed to load image: {ex.Message}");
+                }
+            }
+        };
+
+        var fromViewport = new ButtonMenuItem { Text = "From Viewport" };
+        fromViewport.Click += (s, a) =>
+        {
+            _orchestrator.RequestMonochromeGeneration(null);
+        };
+
+        menu.Items.Add(fromPreview);
+        menu.Items.Add(fromFile);
+        menu.Items.Add(fromViewport);
+        menu.Show();
     }
 
     private void OnGenerateClicked(object sender, EventArgs e)
