@@ -20,6 +20,12 @@ public class GlimpseOverlayConduit : DisplayConduit, IDisposable
     private bool _disposed;
     private readonly object _lock = new();
 
+    // Finalizer to ensure cleanup even if Dispose() isn't called
+    ~GlimpseOverlayConduit()
+    {
+        Dispose(false);
+    }
+
     /// <summary>
     /// Opacity of the overlay (0.0 = fully transparent, 1.0 = fully opaque).
     /// </summary>
@@ -214,6 +220,12 @@ public class GlimpseOverlayConduit : DisplayConduit, IDisposable
 
     public void Dispose()
     {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
         if (!_disposed)
         {
             DisplayBitmap oldDisplayBitmap = null;
@@ -222,7 +234,10 @@ public class GlimpseOverlayConduit : DisplayConduit, IDisposable
             lock (_lock)
             {
                 _disposed = true;
-                Enabled = false;
+                if (disposing)
+                {
+                    Enabled = false; // Only disable if explicitly disposing
+                }
                 
                 oldDisplayBitmap = _displayBitmap;
                 oldStagingBitmap = _stagingBitmap;

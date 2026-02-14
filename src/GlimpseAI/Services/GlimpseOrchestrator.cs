@@ -238,6 +238,8 @@ public class GlimpseOrchestrator : IDisposable
         string prompt, PresetType preset, double denoise, int seed,
         CancellationToken ct)
     {
+        var startMemory = GC.GetTotalMemory(false);
+        
         try
         {
             BusyChanged?.Invoke(this, true);
@@ -291,6 +293,21 @@ public class GlimpseOrchestrator : IDisposable
         finally
         {
             BusyChanged?.Invoke(this, false);
+            
+            // Memory usage tracking for leak detection
+            var endMemory = GC.GetTotalMemory(false);
+            var memoryIncrease = endMemory - startMemory;
+            if (memoryIncrease > 10 * 1024 * 1024) // > 10 MB increase
+            {
+                GC.Collect(); // Force collection to release temporary objects
+                var afterGcMemory = GC.GetTotalMemory(true);
+                var actualIncrease = afterGcMemory - startMemory;
+                
+                if (actualIncrease > 5 * 1024 * 1024) // > 5 MB after GC
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Memory usage increased by {actualIncrease / (1024 * 1024)}MB after generation");
+                }
+            }
         }
     }
 

@@ -748,8 +748,40 @@ public class ComfyUIClient : IDisposable
         if (!_disposed)
         {
             _disposed = true;
-            try { _ws?.Dispose(); } catch { }
-            _client?.Dispose();
+            
+            // Disconnect WebSocket gracefully first
+            try
+            {
+                if (_ws?.State == WebSocketState.Open)
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    _ = DisconnectWebSocketAsync(); // Don't await to prevent hanging
+                }
+            }
+            catch (Exception ex)
+            {
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: Error during WebSocket graceful shutdown: {ex.Message}");
+            }
+            
+            // Force dispose WebSocket
+            try 
+            { 
+                _ws?.Dispose(); 
+            } 
+            catch (Exception ex)
+            {
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: Error disposing WebSocket: {ex.Message}");
+            }
+            
+            // Dispose HTTP client
+            try 
+            { 
+                _client?.Dispose(); 
+            } 
+            catch (Exception ex)
+            {
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: Error disposing HTTP client: {ex.Message}");
+            }
         }
     }
 }
