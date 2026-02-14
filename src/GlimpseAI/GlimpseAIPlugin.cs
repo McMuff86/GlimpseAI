@@ -63,6 +63,9 @@ public class GlimpseAIPlugin : PlugIn
             RhinoApp.Closing -= OnRhinoClosing;
             RhinoApp.WriteLine("Glimpse AI: Shutting down...");
             SaveGlimpseSettings();
+            
+            // Dispose all open panels to cancel generations and close WebSocket
+            GlimpsePanel.DisposeAllInstances();
         }
         catch
         {

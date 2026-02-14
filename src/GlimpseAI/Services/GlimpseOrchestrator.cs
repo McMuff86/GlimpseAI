@@ -778,8 +778,15 @@ public class GlimpseOrchestrator : IDisposable
             
             try
             {
-                // Disconnect WebSocket gracefully
-                _comfyClient?.DisconnectWebSocketAsync().GetAwaiter().GetResult();
+                // Disconnect WebSocket with timeout to prevent blocking Rhino close
+                if (_comfyClient != null)
+                {
+                    var disconnectTask = _comfyClient.DisconnectWebSocketAsync();
+                    if (!disconnectTask.Wait(TimeSpan.FromSeconds(2)))
+                    {
+                        RhinoApp.WriteLine("Glimpse AI: WebSocket disconnect timed out, forcing close");
+                    }
+                }
             }
             catch (Exception ex)
             {

@@ -16,6 +16,7 @@ namespace GlimpseAI.UI;
 [System.Runtime.InteropServices.Guid("B4E8A1C3-5D72-4F9E-A6B1-3C8D2E5F7A90")]
 public class GlimpsePanel : Panel, IPanel
 {
+    private static readonly System.Collections.Generic.List<GlimpsePanel> _allInstances = new();
     private readonly uint _documentSerialNumber;
 
     // --- UI Controls ---
@@ -81,6 +82,17 @@ public class GlimpsePanel : Panel, IPanel
         _documentSerialNumber = documentSerialNumber;
         Content = BuildUI();
         InitializeOrchestrator();
+        _allInstances.Add(this);
+    }
+
+    public static void DisposeAllInstances()
+    {
+        foreach (var panel in _allInstances.ToArray())
+        {
+            try { panel._orchestrator?.Dispose(); }
+            catch { /* best-effort */ }
+        }
+        _allInstances.Clear();
     }
 
     #region UI Construction
