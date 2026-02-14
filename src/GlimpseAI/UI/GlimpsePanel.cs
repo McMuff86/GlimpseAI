@@ -706,8 +706,26 @@ public class GlimpsePanel : Panel, IPanel
 
     public void PanelClosing(uint documentSerialNumber, bool onCloseDocument)
     {
-        _orchestrator?.Dispose();
-        _currentPreviewBitmap?.Dispose();
+        try
+        {
+            // Stop auto mode first to prevent new captures
+            if (_autoModeActive)
+            {
+                _autoModeActive = false;
+                _orchestrator?.StopAutoMode();
+            }
+
+            // Dispose orchestrator (cancels running generations, disconnects WebSocket)
+            _orchestrator?.Dispose();
+            _orchestrator = null;
+
+            _currentPreviewBitmap?.Dispose();
+            _currentPreviewBitmap = null;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Glimpse AI: Error during panel close: {ex.Message}");
+        }
     }
 
     #endregion

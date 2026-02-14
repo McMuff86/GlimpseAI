@@ -46,7 +46,28 @@ public class GlimpseAIPlugin : PlugIn
     {
         RhinoApp.WriteLine("Glimpse AI loaded.");
         _glimpseSettings = LoadGlimpseSettings();
+
+        // Ensure clean shutdown when Rhino closes
+        RhinoApp.Closing += OnRhinoClosing;
+
         return LoadReturnCode.Success;
+    }
+
+    /// <summary>
+    /// Called when Rhino is closing. Ensures all background tasks are stopped.
+    /// </summary>
+    private void OnRhinoClosing(object sender, EventArgs e)
+    {
+        try
+        {
+            RhinoApp.Closing -= OnRhinoClosing;
+            RhinoApp.WriteLine("Glimpse AI: Shutting down...");
+            SaveGlimpseSettings();
+        }
+        catch
+        {
+            // Best-effort during shutdown
+        }
     }
 
     /// <summary>

@@ -189,8 +189,7 @@ public class GlimpseSettingsDialog : Dialog
         {
             Height = 40,
             Wrap = true,
-            SpellCheck = false,
-            PlaceholderText = "Custom style keywords (only used when Style Preset is 'Custom')"
+            SpellCheck = false
         };
 
         // --- Buttons ---
