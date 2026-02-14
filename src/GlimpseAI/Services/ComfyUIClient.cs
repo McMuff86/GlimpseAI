@@ -141,10 +141,23 @@ public class ComfyUIClient : IDisposable
         if (available.Count == 0)
             return null;
 
-        // Check if the checkpoint is SDXL
-        bool isSDXL = !string.IsNullOrEmpty(checkpointName) && 
-                      (checkpointName.Contains("xl", StringComparison.OrdinalIgnoreCase) ||
-                       checkpointName.Contains("sdxl", StringComparison.OrdinalIgnoreCase));
+        // Detect model architecture: default to SDXL (safer) unless clearly SD1.5
+        // SD1.5 indicators: "v1-5", "sd15", "v1_5", "SD15", "realistic_vision", known SD1.5 models
+        bool isSD15 = !string.IsNullOrEmpty(checkpointName) && 
+                      (checkpointName.Contains("v1-5", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("sd15", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("sd_15", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("v1-4", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("sd-v1", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("dreamshaper_8", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("deliberate_v2", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("epicrealism_pure", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("absolutereality", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("realisticVision", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("analogMadness", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("cyberrealistic_v6", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("cyberrealistic_classic", StringComparison.OrdinalIgnoreCase));
+        bool isSDXL = !isSD15;
 
         // Preferred depth ControlNet models in order of preference
         // For SDXL checkpoints, prefer SDXL ControlNets first
