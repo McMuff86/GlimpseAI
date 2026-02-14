@@ -91,7 +91,7 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>
     /// Detects available models (Flux vs SDXL) and sets the pipeline mode.
     /// </summary>
-    private async Task DetectAvailableModelsAsync()
+    public async Task DetectAvailableModelsAsync()
     {
         try
         {

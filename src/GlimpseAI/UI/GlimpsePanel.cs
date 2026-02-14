@@ -723,7 +723,7 @@ public class GlimpsePanel : Panel, IPanel
         }
     }
 
-    private void OnPipelineChanged(object sender, EventArgs e)
+    private async void OnPipelineChanged(object sender, EventArgs e)
     {
         var pipeline = _pipelineDropDown.SelectedIndex switch
         {
@@ -734,6 +734,17 @@ public class GlimpsePanel : Panel, IPanel
         var settings = GetSettings();
         settings.PreferredPipeline = pipeline;
         GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
+
+        // Re-run model detection to apply pipeline change immediately
+        try
+        {
+            await _orchestrator.DetectAvailableModelsAsync();
+            RhinoApp.WriteLine($"Glimpse AI: Pipeline switched to {pipeline}");
+        }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"Glimpse AI: Pipeline switch failed: {ex.Message}");
+        }
     }
 
     private void OnDenoiseSliderChanged(object sender, EventArgs e)
