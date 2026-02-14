@@ -659,8 +659,8 @@ public static class WorkflowBuilder
                 ["clip"] = new object[] { "2", 0 }
             }),
 
-            // Node 8: ControlNetApplyAdvanced (InstantX Union requires VAE input)
-            ["8"] = MakeNode("ControlNetApplyAdvanced", new Dictionary<string, object>
+            // Node 8: ControlNetApplySD3 (InstantX Union requires VAE as required input)
+            ["8"] = MakeNode("ControlNetApplySD3", new Dictionary<string, object>
             {
                 ["strength"] = actualStrength,
                 ["start_percent"] = 0.0,
