@@ -101,6 +101,70 @@ public class ComfyUIClient : IDisposable
     }
 
     /// <summary>
+    /// Queries ComfyUI for available ControlNet models.
+    /// </summary>
+    public async Task<List<string>> GetAvailableControlNetsAsync()
+    {
+        try
+        {
+            var response = await _client.GetAsync("/object_info/ControlNetLoader");
+            if (!response.IsSuccessStatusCode)
+                return new List<string>();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var root = JsonNode.Parse(json);
+
+            var controlNetNames = root?["ControlNetLoader"]?["input"]?["required"]?["control_net_name"];
+            if (controlNetNames is JsonArray outerArr && outerArr.Count > 0 && outerArr[0] is JsonArray namesArr)
+            {
+                return namesArr
+                    .Select(n => n?.GetValue<string>())
+                    .Where(n => n != null)
+                    .ToList();
+            }
+
+            return new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Finds the best available ControlNet model for depth control.
+    /// Returns null if no suitable ControlNet model is found.
+    /// </summary>
+    public async Task<string> GetBestDepthControlNetAsync()
+    {
+        var available = await GetAvailableControlNetsAsync();
+        if (available.Count == 0)
+            return null;
+
+        // Preferred depth ControlNet models in order of preference
+        var preferred = new[]
+        {
+            "controlnet-depth-sdxl-1.0",
+            "control_v11f1p_sd15_depth", 
+            "control-lora-depth-rank256",
+            "t2i-adapter_diffusers_xl_depth_midas",
+            "controlnet_depth"
+        };
+
+        foreach (var pref in preferred)
+        {
+            var match = available.FirstOrDefault(a =>
+                a.Contains(pref, StringComparison.OrdinalIgnoreCase) ||
+                a.Contains("depth", StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+                return match;
+        }
+
+        // If no depth-specific model found, return the first available
+        return available.FirstOrDefault();
+    }
+
+    /// <summary>
     /// Finds the best available checkpoint for the given preset.
     /// </summary>
     public async Task<string> GetCheckpointForPresetAsync(PresetType preset)
@@ -408,7 +472,34 @@ public class ComfyUIClient : IDisposable
                     stopwatch.Elapsed);
             }
 
-            // 4. Build workflow — always use SaveImage for reliable output retrieval
+            // 4. Get ControlNet settings from GlimpseSettings
+            var settings = GlimpseAI.GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+            string controlNetModel = null;
+            
+            // Auto-detect ControlNet model (for non-Fast presets) if enabled
+            if (request.Preset != PresetType.Fast && settings.UseControlNet)
+            {
+                if (!string.IsNullOrEmpty(settings.ControlNetModel))
+                {
+                    controlNetModel = settings.ControlNetModel;
+                }
+                else
+                {
+                    controlNetModel = await GetBestDepthControlNetAsync();
+                    if (controlNetModel == null)
+                    {
+                        Rhino.RhinoApp.WriteLine("Glimpse AI: No ControlNet models found - falling back to img2img for this generation");
+                    }
+                    else
+                    {
+                        // Save the auto-detected model for next time
+                        settings.ControlNetModel = controlNetModel;
+                        GlimpseAI.GlimpseAIPlugin.Instance?.SaveGlimpseSettings();
+                    }
+                }
+            }
+
+            // 5. Build workflow — always use SaveImage for reliable output retrieval
             // WebSocket is used for progress/previews only, not for final image delivery
             var workflow = WorkflowBuilder.BuildWorkflow(
                 request.Preset,
@@ -419,6 +510,9 @@ public class ComfyUIClient : IDisposable
                 request.DenoiseStrength,
                 seed,
                 checkpointName,
+                controlNetModel,
+                controlNetStrength: settings.ControlNetStrength,
+                useDepthPreprocessor: settings.UseDepthPreprocessor,
                 useWebSocketOutput: false);
 
             // 5. Queue prompt
