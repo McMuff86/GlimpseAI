@@ -555,26 +555,17 @@ public class ComfyUIClient : IDisposable
                         stopwatch.Elapsed);
                 }
 
-                // Auto-detect ControlNet model (for non-Fast presets) if enabled
+                // Auto-detect best ControlNet for the current checkpoint (always re-match)
                 if (request.Preset != PresetType.Fast && settings.UseControlNet)
                 {
-                    if (!string.IsNullOrEmpty(settings.ControlNetModel))
+                    controlNetModel = await GetBestDepthControlNetAsync(checkpointName);
+                    if (controlNetModel == null)
                     {
-                        controlNetModel = settings.ControlNetModel;
+                        Rhino.RhinoApp.WriteLine("Glimpse AI: No ControlNet models found - falling back to img2img for this generation");
                     }
                     else
                     {
-                        controlNetModel = await GetBestDepthControlNetAsync(checkpointName);
-                        if (controlNetModel == null)
-                        {
-                            Rhino.RhinoApp.WriteLine("Glimpse AI: No ControlNet models found - falling back to img2img for this generation");
-                        }
-                        else
-                        {
-                            // Save the auto-detected model for next time
-                            settings.ControlNetModel = controlNetModel;
-                            GlimpseAI.GlimpseAIPlugin.Instance?.SaveGlimpseSettings();
-                        }
+                        Rhino.RhinoApp.WriteLine($"Glimpse AI: Selected ControlNet: {controlNetModel} for checkpoint: {checkpointName}");
                     }
                 }
             }
