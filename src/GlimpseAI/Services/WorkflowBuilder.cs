@@ -813,9 +813,9 @@ public static class WorkflowBuilder
             ["146"] = MakeNode("ImageStitch", new Dictionary<string, object>
             {
                 ["direction"] = "right",
-                ["match_size"] = true,
-                ["padding"] = 0,
-                ["fill_color"] = "white"
+                ["match_image_size"] = true,
+                ["spacing_width"] = 0,
+                ["spacing_color"] = "white"
             }, new Dictionary<string, object>
             {
                 ["image1"] = new object[] { "142", 0 }
