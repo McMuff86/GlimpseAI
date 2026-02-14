@@ -372,7 +372,6 @@ public class GlimpsePanel : Panel, IPanel
         layout.Items.Add(new Label { Text = "Seed:" });
         layout.Items.Add(_seedTextBox);
         layout.Items.Add(_recommendedLabel);
-        };
 
         return layout;
     }
