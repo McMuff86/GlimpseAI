@@ -2,6 +2,7 @@ using System;
 using Rhino;
 using Rhino.PlugIns;
 using GlimpseAI.Models;
+using GlimpseAI.UI;
 
 namespace GlimpseAI;
 
