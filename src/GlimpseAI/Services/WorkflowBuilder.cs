@@ -920,7 +920,7 @@ public static class WorkflowBuilder
         // === Stage 1: Load Models ===
         workflow["10"] = MakeNode("Hy3DModelLoader", new Dictionary<string, object>
         {
-            ["model"] = "flux1-dev-fp8.safetensors",
+            ["model"] = "hunyuan3d-dit-v2.safetensors",
             ["attention_mode"] = "sdpa",
             ["cublas_ops"] = false
         });
@@ -953,7 +953,7 @@ public static class WorkflowBuilder
             ["height"] = 518,
             ["interpolation"] = "lanczos",
             ["method"] = "pad",
-            ["conditions"] = "always",
+            ["condition"] = "always",
             ["multiple_of"] = 2,
             ["image"] = new object[] { "50", 0 }
         });
@@ -1010,9 +1010,9 @@ public static class WorkflowBuilder
             ["guidance_scale"] = 5.5,
             ["steps"] = 50,
             ["seed"] = seed,
-            ["pipeline"] = new object[] { "148", 0 },
+            ["pipeline"] = new object[] { "10", 0 },
             ["front"] = new object[] { "195", 0 },
-            ["scheduler"] = new object[] { "148", 1 }
+            ["scheduler"] = new object[] { "148", 0 }
         });
 
         // === Stage 6: VAE Decode (latent → mesh) ===
@@ -1098,9 +1098,9 @@ public static class WorkflowBuilder
                 ["x"] = 0,
                 ["y"] = 0,
                 ["resize_source"] = false,
-                ["destination"] = new object[] { "79", 1 },
+                ["destination"] = new object[] { "79", 0 },
                 ["source"] = new object[] { "184", 0 },
-                ["mask"] = new object[] { "79", 2 }
+                ["mask"] = new object[] { "79", 3 }
             });
 
             workflow["88"] = MakeNode("Hy3DSampleMultiView", new Dictionary<string, object>
@@ -1109,11 +1109,12 @@ public static class WorkflowBuilder
                 ["steps"] = 50,
                 ["seed"] = 1027,
                 ["denoise_strength"] = 1,
-                ["pipeline"] = new object[] { "149", 0 },
+                ["pipeline"] = new object[] { "85", 0 },
                 ["ref_image"] = new object[] { "35", 0 },
                 ["normal_maps"] = new object[] { "64", 0 },
-                ["position_maps"] = new object[] { "79", 3 },
-                ["camera_config"] = new object[] { "61", 0 }
+                ["position_maps"] = new object[] { "79", 1 },
+                ["camera_config"] = new object[] { "61", 0 },
+                ["scheduler"] = new object[] { "149", 0 }
             });
 
             // === Stage 11: Upscale & Bake Texture ===
@@ -1123,7 +1124,7 @@ public static class WorkflowBuilder
                 ["height"] = 2048,
                 ["interpolation"] = "lanczos",
                 ["method"] = "stretch",
-                ["conditions"] = "always",
+                ["condition"] = "always",
                 ["multiple_of"] = 0,
                 ["image"] = new object[] { "88", 0 }
             });
@@ -1131,7 +1132,7 @@ public static class WorkflowBuilder
             workflow["92"] = MakeNode("Hy3DBakeFromMultiview", new Dictionary<string, object>
             {
                 ["images"] = new object[] { "117", 0 },
-                ["renderer"] = new object[] { "79", 0 },
+                ["renderer"] = new object[] { "79", 2 },
                 ["camera_config"] = new object[] { "61", 0 }
             });
 
@@ -1140,7 +1141,7 @@ public static class WorkflowBuilder
             {
                 ["texture"] = new object[] { "92", 0 },
                 ["mask"] = new object[] { "92", 1 },
-                ["renderer"] = new object[] { "79", 0 }
+                ["renderer"] = new object[] { "79", 2 }
             });
 
             workflow["104"] = MakeNode("CV2InpaintTexture", new Dictionary<string, object>
@@ -1154,7 +1155,7 @@ public static class WorkflowBuilder
             workflow["98"] = MakeNode("Hy3DApplyTexture", new Dictionary<string, object>
             {
                 ["texture"] = new object[] { "104", 0 },
-                ["renderer"] = new object[] { "79", 0 }
+                ["renderer"] = new object[] { "79", 2 }
             });
 
             // === Stage 13b: Export textured mesh ===
