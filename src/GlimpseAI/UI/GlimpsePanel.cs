@@ -33,9 +33,11 @@ public class GlimpsePanel : Panel, IPanel
     // Controls row
     private DropDown _presetDropDown;
     private Slider _denoiseSlider;
-    private Label _denoiseValueLabel;
+    private TextBox _denoiseValueBox;
     private Slider _cfgSlider;
-    private Label _cfgValueLabel;
+    private TextBox _cfgValueBox;
+    private bool _updatingFromSlider;
+    private bool _updatingFromTextBox;
     private TextBox _seedTextBox;
 
     // Overlay controls
@@ -271,13 +273,15 @@ public class GlimpsePanel : Panel, IPanel
             Value = Math.Clamp(sliderValue, 0, 100),
             Width = 100
         };
-        _denoiseSlider.ValueChanged += OnDenoiseChanged;
+        _denoiseSlider.ValueChanged += OnDenoiseSliderChanged;
 
-        _denoiseValueLabel = new Label
+        _denoiseValueBox = new TextBox
         {
             Text = settings.DenoiseStrength.ToString("F2"),
-            Width = 32
+            Width = 45
         };
+        _denoiseValueBox.LostFocus += OnDenoiseTextChanged;
+        _denoiseValueBox.KeyDown += (s, e) => { if (e.Key == Keys.Enter) OnDenoiseTextChanged(s, e); };
 
         // CFG slider (10-200 mapped to 1.0-20.0)
         int cfgSliderValue = (int)((settings.CfgScale - 1.0) / 19.0 * 190) + 10;
@@ -288,13 +292,15 @@ public class GlimpsePanel : Panel, IPanel
             Value = Math.Clamp(cfgSliderValue, 10, 200),
             Width = 100
         };
-        _cfgSlider.ValueChanged += OnCfgChanged;
+        _cfgSlider.ValueChanged += OnCfgSliderChanged;
 
-        _cfgValueLabel = new Label
+        _cfgValueBox = new TextBox
         {
             Text = settings.CfgScale.ToString("F1"),
-            Width = 32
+            Width = 45
         };
+        _cfgValueBox.LostFocus += OnCfgTextChanged;
+        _cfgValueBox.KeyDown += (s, e) => { if (e.Key == Keys.Enter) OnCfgTextChanged(s, e); };
 
         // Seed text box
         _seedTextBox = new TextBox
@@ -314,10 +320,10 @@ public class GlimpsePanel : Panel, IPanel
                 _presetDropDown,
                 new Label { Text = "Denoise:" },
                 _denoiseSlider,
-                _denoiseValueLabel,
+                _denoiseValueBox,
                 new Label { Text = "CFG:" },
                 _cfgSlider,
-                _cfgValueLabel,
+                _cfgValueBox,
                 new Label { Text = "Seed:" },
                 _seedTextBox
             }
@@ -520,6 +526,9 @@ public class GlimpsePanel : Panel, IPanel
             _generateButton.Enabled = !busy;
             _presetDropDown.Enabled = !busy;
             _denoiseSlider.Enabled = !busy;
+            _denoiseValueBox.Enabled = !busy;
+            _cfgSlider.Enabled = !busy;
+            _cfgValueBox.Enabled = !busy;
             _seedTextBox.Enabled = !busy;
 
             if (busy)
@@ -697,11 +706,33 @@ public class GlimpsePanel : Panel, IPanel
         }
     }
 
-    private void OnDenoiseChanged(object sender, EventArgs e)
+    private void OnDenoiseSliderChanged(object sender, EventArgs e)
     {
+        if (_updatingFromTextBox) return;
+        _updatingFromSlider = true;
         var denoise = GetCurrentDenoise();
-        _denoiseValueLabel.Text = denoise.ToString("F2");
+        _denoiseValueBox.Text = denoise.ToString("F2");
+        SaveDenoiseAndNotify(denoise);
+        _updatingFromSlider = false;
+    }
 
+    private void OnDenoiseTextChanged(object sender, EventArgs e)
+    {
+        if (_updatingFromSlider) return;
+        if (double.TryParse(_denoiseValueBox.Text, System.Globalization.NumberStyles.Float, 
+            System.Globalization.CultureInfo.InvariantCulture, out var val))
+        {
+            val = Math.Clamp(val, 0.0, 1.0);
+            _updatingFromTextBox = true;
+            _denoiseSlider.Value = (int)((val - 0.1) / 0.9 * 100);
+            _denoiseValueBox.Text = val.ToString("F2");
+            SaveDenoiseAndNotify(val);
+            _updatingFromTextBox = false;
+        }
+    }
+
+    private void SaveDenoiseAndNotify(double denoise)
+    {
         var settings = GetSettings();
         settings.DenoiseStrength = denoise;
         GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
@@ -717,11 +748,33 @@ public class GlimpsePanel : Panel, IPanel
         }
     }
 
-    private void OnCfgChanged(object sender, EventArgs e)
+    private void OnCfgSliderChanged(object sender, EventArgs e)
     {
+        if (_updatingFromTextBox) return;
+        _updatingFromSlider = true;
         var cfg = GetCurrentCfg();
-        _cfgValueLabel.Text = cfg.ToString("F1");
+        _cfgValueBox.Text = cfg.ToString("F1");
+        SaveCfgAndNotify(cfg);
+        _updatingFromSlider = false;
+    }
 
+    private void OnCfgTextChanged(object sender, EventArgs e)
+    {
+        if (_updatingFromSlider) return;
+        if (double.TryParse(_cfgValueBox.Text, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var val))
+        {
+            val = Math.Clamp(val, 1.0, 20.0);
+            _updatingFromTextBox = true;
+            _cfgSlider.Value = (int)(((val - 1.0) / 19.0 * 190) + 10);
+            _cfgValueBox.Text = val.ToString("F1");
+            SaveCfgAndNotify(val);
+            _updatingFromTextBox = false;
+        }
+    }
+
+    private void SaveCfgAndNotify(double cfg)
+    {
         var settings = GetSettings();
         settings.CfgScale = cfg;
         GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
@@ -924,12 +977,12 @@ public class GlimpsePanel : Panel, IPanel
         // Update denoise slider
         int denoiseSliderValue = (int)((settings.DenoiseStrength - 0.1) / 0.9 * 100);
         _denoiseSlider.Value = Math.Clamp(denoiseSliderValue, 0, 100);
-        _denoiseValueLabel.Text = settings.DenoiseStrength.ToString("F2");
+        _denoiseValueBox.Text = settings.DenoiseStrength.ToString("F2");
 
         // Update CFG slider
         int cfgSliderValue = (int)((settings.CfgScale - 1.0) / 19.0 * 190) + 10;
         _cfgSlider.Value = Math.Clamp(cfgSliderValue, 10, 200);
-        _cfgValueLabel.Text = settings.CfgScale.ToString("F1");
+        _cfgValueBox.Text = settings.CfgScale.ToString("F1");
 
         // Update other controls
         _presetDropDown.SelectedIndex = (int)settings.ActivePreset;
