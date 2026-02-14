@@ -529,13 +529,13 @@ public class GlimpsePanel : Panel, IPanel
         _orchestrator.ModelsRefreshed += (s, e) => Application.Instance.Invoke(() =>
         {
             RefreshModelList();
-            _monochromeButton.Enabled = _orchestrator.IsKontextAvailable;
+            _monochromeButton.Enabled = true; // Always enabled, shows error if models missing
             if (_orchestrator.IsKontextAvailable)
                 _monochromeButton.ToolTip = "Convert preview to monochrome architectural model (Flux Kontext)";
             else
                 _monochromeButton.ToolTip = "Requires flux1-dev-kontext_fp8_scaled.safetensors in ComfyUI/models/unet/";
 
-            _meshButton.Enabled = _orchestrator.IsHunyuan3DAvailable;
+            _meshButton.Enabled = true; // Always enabled, shows error if models missing
             if (_orchestrator.IsHunyuan3DAvailable)
                 _meshButton.ToolTip = "Generate 3D mesh from image using Hunyuan3D v2 (auto-imports GLB into Rhino)";
             else
@@ -594,8 +594,8 @@ public class GlimpsePanel : Panel, IPanel
         Application.Instance.Invoke(() =>
         {
             _generateButton.Enabled = !busy;
-            _monochromeButton.Enabled = !busy && (_orchestrator?.IsKontextAvailable ?? false);
-            _meshButton.Enabled = !busy && (_orchestrator?.IsHunyuan3DAvailable ?? false);
+            _monochromeButton.Enabled = !busy;
+            _meshButton.Enabled = !busy;
             _presetDropDown.Enabled = !busy;
             _modelDropDown.Enabled = !busy;
             _denoiseSlider.Enabled = !busy;
