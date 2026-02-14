@@ -998,21 +998,14 @@ public static class WorkflowBuilder
         });
 
         // === Stage 5: Generate Mesh from Multi-View ===
-        workflow["148"] = MakeNode("Hy3DDiffusersSchedulerConfig", new Dictionary<string, object>
-        {
-            ["scheduler"] = "Euler A",
-            ["sigmas"] = "default",
-            ["pipeline"] = new object[] { "10", 0 }
-        });
-
         workflow["166"] = MakeNode("Hy3DGenerateMeshMultiView", new Dictionary<string, object>
         {
             ["guidance_scale"] = 5.5,
             ["steps"] = 50,
             ["seed"] = seed,
+            ["scheduler"] = "FlowMatchEulerDiscreteScheduler",
             ["pipeline"] = new object[] { "10", 0 },
-            ["front"] = new object[] { "195", 0 },
-            ["scheduler"] = new object[] { "148", 0 }
+            ["front"] = new object[] { "195", 0 }
         });
 
         // === Stage 6: VAE Decode (latent → mesh) ===
