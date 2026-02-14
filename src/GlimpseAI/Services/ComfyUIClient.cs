@@ -147,20 +147,28 @@ public class ComfyUIClient : IDisposable
                        checkpointName.Contains("sdxl", StringComparison.OrdinalIgnoreCase));
 
         // Preferred depth ControlNet models in order of preference
-        var preferred = new[]
-        {
-            "controlnet-depth-sdxl-1.0",
-            "control_v11f1p_sd15_depth", 
-            "control-lora-depth-rank256",
-            "t2i-adapter_diffusers_xl_depth_midas",
-            "controlnet_depth"
-        };
+        // For SDXL checkpoints, prefer SDXL ControlNets first
+        var preferred = isSDXL
+            ? new[]
+            {
+                "diffusers_xl_depth_full",
+                "diffusion_pytorch_model.fp16",
+                "controlnet-depth-sdxl-1.0",
+                "controlnet-depth-sdxl",
+                "t2i-adapter_diffusers_xl_depth_midas",
+                "control-lora-depth-rank256",
+            }
+            : new[]
+            {
+                "control_v11f1p_sd15_depth",
+                "controlnet_depth",
+                "control-lora-depth-rank256",
+            };
 
         foreach (var pref in preferred)
         {
             var match = available.FirstOrDefault(a =>
-                a.Contains(pref, StringComparison.OrdinalIgnoreCase) ||
-                a.Contains("depth", StringComparison.OrdinalIgnoreCase));
+                a.Contains(pref, StringComparison.OrdinalIgnoreCase));
             if (match != null)
             {
                 // Check for potential ControlNet/Checkpoint mismatch
