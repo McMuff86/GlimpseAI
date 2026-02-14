@@ -1067,6 +1067,99 @@ public class ComfyUIClient : IDisposable
 
     #endregion
 
+    #region Kontext Monochrome Generation
+
+    /// <summary>
+    /// Whether the Flux Kontext model (flux1-dev-kontext_fp8_scaled.safetensors) is available.
+    /// Set during model detection.
+    /// </summary>
+    public bool IsKontextAvailable { get; set; }
+
+    /// <summary>
+    /// Checks if the Kontext UNet model is available in ComfyUI.
+    /// </summary>
+    public async Task<bool> CheckKontextAvailableAsync()
+    {
+        try
+        {
+            var response = await _client.GetAsync("/object_info/UNETLoader");
+            if (!response.IsSuccessStatusCode)
+                return false;
+
+            var json = await response.Content.ReadAsStringAsync();
+            var root = JsonNode.Parse(json);
+
+            var unetNames = root?["UNETLoader"]?["input"]?["required"]?["unet_name"];
+            if (unetNames is JsonArray outerArr && outerArr.Count > 0 && outerArr[0] is JsonArray namesArr)
+            {
+                return namesArr.Any(n =>
+                    n?.GetValue<string>()?.Contains("kontext", StringComparison.OrdinalIgnoreCase) == true);
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Generates a monochrome architectural model from an input image using Flux Kontext.
+    /// Uploads the image, builds the workflow, queues, and waits for result.
+    /// </summary>
+    public async Task<RenderResult> GenerateMonochromeAsync(
+        byte[] inputImage, string prompt, long seed, CancellationToken ct)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            // 1. Upload input image
+            var filename = await UploadImageAsync(
+                inputImage,
+                $"glimpse_monochrome_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+
+            ct.ThrowIfCancellationRequested();
+
+            // 2. Build Kontext monochrome workflow (always use SaveImage for reliable retrieval)
+            var workflow = WorkflowBuilder.BuildFluxKontextMonochromeWorkflow(
+                filename, prompt, seed, useWebSocketOutput: false);
+
+            // 3. Queue prompt
+            var promptId = await QueuePromptAsync(workflow);
+
+            // 4. Wait for completion (reuse existing WebSocket/polling logic)
+            // Create a minimal RenderRequest for the wait methods
+            var dummyRequest = new RenderRequest
+            {
+                Preset = PresetType.HighQuality,
+                Seed = (int)(seed & 0x7FFFFFFF)
+            };
+
+            if (IsWebSocketConnected)
+            {
+                return await WaitForCompletionWebSocketAsync(
+                    promptId, dummyRequest, (int)(seed & 0x7FFFFFFF), "Kontext", stopwatch, ct);
+            }
+            else
+            {
+                return await WaitForCompletionPollingAsync(
+                    promptId, dummyRequest, (int)(seed & 0x7FFFFFFF), "Kontext", stopwatch, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            try { _ = InterruptGenerationAsync(); } catch { }
+            return RenderResult.Fail("Monochrome generation was cancelled.", stopwatch.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            return RenderResult.Fail($"Monochrome generation failed: {ex.Message}", stopwatch.Elapsed);
+        }
+    }
+
+    #endregion
+
     #region Florence2 Vision Support
 
     /// <summary>

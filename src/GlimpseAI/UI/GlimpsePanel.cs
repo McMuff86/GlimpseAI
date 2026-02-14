@@ -55,6 +55,7 @@ public class GlimpsePanel : Panel, IPanel
 
     // Buttons row
     private Button _generateButton;
+    private Button _monochromeButton;
     private Button _autoToggleButton;
     private Button _saveButton;
     private Button _settingsButton;
@@ -426,6 +427,9 @@ public class GlimpsePanel : Panel, IPanel
         _generateButton = new Button { Text = "Generate" };
         _generateButton.Click += OnGenerateClicked;
 
+        _monochromeButton = new Button { Text = "Monochrome", Enabled = false };
+        _monochromeButton.Click += OnMonochromeClicked;
+
         _autoToggleButton = new Button { Text = "Auto" };
         _autoToggleButton.Click += OnAutoToggleClicked;
 
@@ -442,6 +446,7 @@ public class GlimpsePanel : Panel, IPanel
             Items =
             {
                 new StackLayoutItem(_generateButton, expand: true),
+                new StackLayoutItem(_monochromeButton, expand: true),
                 new StackLayoutItem(_autoToggleButton, expand: true),
                 new StackLayoutItem(_saveButton, expand: true),
                 _settingsButton
@@ -515,7 +520,15 @@ public class GlimpsePanel : Panel, IPanel
         _orchestrator.BusyChanged += OnBusyChanged;
         _orchestrator.ProgressChanged += OnProgressChanged;
         _orchestrator.PreviewImageReceived += OnPreviewImageReceived;
-        _orchestrator.ModelsRefreshed += (s, e) => Application.Instance.Invoke(RefreshModelList);
+        _orchestrator.ModelsRefreshed += (s, e) => Application.Instance.Invoke(() =>
+        {
+            RefreshModelList();
+            _monochromeButton.Enabled = _orchestrator.IsKontextAvailable;
+            if (_orchestrator.IsKontextAvailable)
+                _monochromeButton.ToolTip = "Convert preview to monochrome architectural model (Flux Kontext)";
+            else
+                _monochromeButton.ToolTip = "Requires flux1-dev-kontext_fp8_scaled.safetensors in ComfyUI/models/unet/";
+        });
     }
 
     /// <summary>
@@ -569,6 +582,7 @@ public class GlimpsePanel : Panel, IPanel
         Application.Instance.Invoke(() =>
         {
             _generateButton.Enabled = !busy;
+            _monochromeButton.Enabled = !busy && (_orchestrator?.IsKontextAvailable ?? false);
             _presetDropDown.Enabled = !busy;
             _modelDropDown.Enabled = !busy;
             _denoiseSlider.Enabled = !busy;
@@ -652,6 +666,27 @@ public class GlimpsePanel : Panel, IPanel
     #endregion
 
     #region UI Event Handlers
+
+    private void OnMonochromeClicked(object sender, EventArgs e)
+    {
+        // Use current preview image if available, otherwise null (orchestrator will capture viewport)
+        byte[] inputImage = null;
+        if (_currentPreviewBitmap != null)
+        {
+            try
+            {
+                using var ms = new MemoryStream();
+                _currentPreviewBitmap.Save(ms, ImageFormat.Png);
+                inputImage = ms.ToArray();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Failed to extract preview image: {ex.Message}");
+            }
+        }
+
+        _orchestrator.RequestMonochromeGeneration(inputImage);
+    }
 
     private void OnGenerateClicked(object sender, EventArgs e)
     {

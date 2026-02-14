@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using GlimpseAI.Models;
 
@@ -734,6 +735,168 @@ public static class WorkflowBuilder
             }, new Dictionary<string, object>
             {
                 ["images"] = new object[] { "11", 0 }
+            });
+        }
+
+        return workflow;
+    }
+
+    #endregion
+
+    #region Flux Kontext Monochrome Workflow
+
+    /// <summary>
+    /// Default prompt for monochrome architectural model conversion.
+    /// </summary>
+    public const string DefaultMonochromePrompt =
+        "convert image into a clean monochrome architectural model with no textures, ambient lighting and clean smooth geometry while removing details such as people, railings, background, water and trees.";
+
+    /// <summary>
+    /// Builds a Flux Kontext workflow that converts an input image into a clean,
+    /// untextured monochrome architectural model.
+    /// Uses ImageStitch (self-reference) → FluxKontextImageScale → KSampler pipeline.
+    /// </summary>
+    public static Dictionary<string, object> BuildFluxKontextMonochromeWorkflow(
+        string inputImageName, string prompt, long seed, bool useWebSocketOutput = true)
+    {
+        if (string.IsNullOrEmpty(prompt))
+            prompt = DefaultMonochromePrompt;
+
+        var workflow = new Dictionary<string, object>
+        {
+            // Node 37: UNETLoader (Kontext model)
+            ["37"] = MakeNode("UNETLoader", new Dictionary<string, object>
+            {
+                ["unet_name"] = "flux1-dev-kontext_fp8_scaled.safetensors",
+                ["weight_dtype"] = "default"
+            }),
+
+            // Node 38: DualCLIPLoader (Flux CLIP)
+            ["38"] = MakeNode("DualCLIPLoader", new Dictionary<string, object>
+            {
+                ["clip_name1"] = "clip_l.safetensors",
+                ["clip_name2"] = "t5xxl_fp8_e4m3fn.safetensors",
+                ["type"] = "flux",
+                ["dual_clip_mode"] = "default"
+            }),
+
+            // Node 39: VAELoader
+            ["39"] = MakeNode("VAELoader", new Dictionary<string, object>
+            {
+                ["vae_name"] = "ae.safetensors"
+            }),
+
+            // Node 6: CLIPTextEncode (prompt)
+            ["6"] = MakeNode("CLIPTextEncode", new Dictionary<string, object>
+            {
+                ["text"] = prompt
+            }, new Dictionary<string, object>
+            {
+                ["clip"] = new object[] { "38", 0 }
+            }),
+
+            // Node 135: ConditioningZeroOut (negative)
+            ["135"] = MakeNode("ConditioningZeroOut", new Dictionary<string, object>(),
+                new Dictionary<string, object>
+                {
+                    ["conditioning"] = new object[] { "6", 0 }
+                }),
+
+            // Node 142: LoadImage (input image)
+            ["142"] = MakeNode("LoadImage", new Dictionary<string, object>
+            {
+                ["image"] = inputImageName
+            }),
+
+            // Node 146: ImageStitch (stitch input with itself for Kontext reference)
+            // Only image1 is connected; the node duplicates it as both reference and target
+            ["146"] = MakeNode("ImageStitch", new Dictionary<string, object>
+            {
+                ["direction"] = "right",
+                ["match_size"] = true,
+                ["padding"] = 0,
+                ["fill_color"] = "white"
+            }, new Dictionary<string, object>
+            {
+                ["image1"] = new object[] { "142", 0 }
+            }),
+
+            // Node 42: FluxKontextImageScale
+            ["42"] = MakeNode("FluxKontextImageScale", new Dictionary<string, object>(),
+                new Dictionary<string, object>
+                {
+                    ["image"] = new object[] { "146", 0 }
+                }),
+
+            // Node 124: VAEEncode
+            ["124"] = MakeNode("VAEEncode", new Dictionary<string, object>(),
+                new Dictionary<string, object>
+                {
+                    ["pixels"] = new object[] { "42", 0 },
+                    ["vae"] = new object[] { "39", 0 }
+                }),
+
+            // Node 177: ReferenceLatent
+            ["177"] = MakeNode("ReferenceLatent", new Dictionary<string, object>(),
+                new Dictionary<string, object>
+                {
+                    ["conditioning"] = new object[] { "6", 0 },
+                    ["latent"] = new object[] { "124", 0 }
+                }),
+
+            // Node 35: FluxGuidance
+            ["35"] = MakeNode("FluxGuidance", new Dictionary<string, object>
+            {
+                ["guidance"] = 2.5
+            }, new Dictionary<string, object>
+            {
+                ["conditioning"] = new object[] { "177", 0 }
+            }),
+
+            // Node 31: KSampler
+            ["31"] = MakeNode("KSampler", new Dictionary<string, object>
+            {
+                ["seed"] = seed,
+                ["control_after_generate"] = "randomize",
+                ["steps"] = 20,
+                ["cfg"] = 1.0,
+                ["sampler_name"] = "euler",
+                ["scheduler"] = "simple",
+                ["denoise"] = 1.0
+            }, new Dictionary<string, object>
+            {
+                ["model"] = new object[] { "37", 0 },
+                ["positive"] = new object[] { "35", 0 },
+                ["negative"] = new object[] { "135", 0 },
+                ["latent_image"] = new object[] { "124", 0 }
+            }),
+
+            // Node 8: VAEDecode
+            ["8"] = MakeNode("VAEDecode", new Dictionary<string, object>(),
+                new Dictionary<string, object>
+                {
+                    ["samples"] = new object[] { "31", 0 },
+                    ["vae"] = new object[] { "39", 0 }
+                })
+        };
+
+        // Node 136: Output
+        if (useWebSocketOutput)
+        {
+            workflow["136"] = MakeNode("SaveImageWebsocket", new Dictionary<string, object>(),
+                new Dictionary<string, object>
+                {
+                    ["images"] = new object[] { "8", 0 }
+                });
+        }
+        else
+        {
+            workflow["136"] = MakeNode("SaveImage", new Dictionary<string, object>
+            {
+                ["filename_prefix"] = "GlimpseAI/monochrome"
+            }, new Dictionary<string, object>
+            {
+                ["images"] = new object[] { "8", 0 }
             });
         }
 

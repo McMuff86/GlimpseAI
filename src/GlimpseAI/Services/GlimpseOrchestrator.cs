@@ -19,8 +19,10 @@ public class GlimpseOrchestrator : IDisposable
     private CancellationTokenSource _currentGenerationCts;
     private bool _disposed;
     private bool _isFluxAvailable;
+    private bool _isKontextAvailable;
     private bool _useFlux;
     public bool IsUsingFlux => _useFlux;
+    public bool IsKontextAvailable => _isKontextAvailable;
 
     /// <summary>Available checkpoint models (SDXL/SD1.5) from ComfyUI.</summary>
     public System.Collections.Generic.List<string> AvailableCheckpoints { get; private set; } = new();
@@ -112,6 +114,11 @@ public class GlimpseOrchestrator : IDisposable
             ModelsRefreshed?.Invoke(this, EventArgs.Empty);
 
             _isFluxAvailable = await _comfyClient.IsFluxAvailableAsync();
+            
+            // Detect Kontext model availability
+            _isKontextAvailable = await _comfyClient.CheckKontextAvailableAsync();
+            _comfyClient.IsKontextAvailable = _isKontextAvailable;
+            RhinoApp.WriteLine($"Glimpse AI: Kontext model available: {_isKontextAvailable}");
             var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
             var preferred = settings.PreferredPipeline ?? "auto";
 
@@ -211,6 +218,79 @@ public class GlimpseOrchestrator : IDisposable
         Task.Run(() => GenerateFromCaptureAsync(
             capture.viewportImage, capture.depthImage,
             prompt, preset, denoise, cfgScale, seed, ct));
+    }
+
+    /// <summary>
+    /// Generates a monochrome architectural model from an input image using Flux Kontext.
+    /// If no input image is provided, captures the current viewport.
+    /// </summary>
+    public void RequestMonochromeGeneration(byte[] inputImage, string prompt = null)
+    {
+        if (!_isKontextAvailable)
+        {
+            RenderCompleted?.Invoke(this,
+                RenderResult.Fail("Kontext model (flux1-dev-kontext_fp8_scaled.safetensors) not found. Install it in ComfyUI/models/unet/.", TimeSpan.Zero));
+            return;
+        }
+
+        // If no input image, capture viewport
+        if (inputImage == null || inputImage.Length == 0)
+        {
+            var capture = CaptureCurrentViewport(PresetType.HighQuality);
+            inputImage = capture.viewportImage;
+            if (inputImage == null)
+            {
+                RenderCompleted?.Invoke(this,
+                    RenderResult.Fail("No preview image available and failed to capture viewport.", TimeSpan.Zero));
+                return;
+            }
+        }
+
+        CancelCurrentGeneration();
+        _currentGenerationCts = new CancellationTokenSource();
+        var ct = _currentGenerationCts.Token;
+        var imageToProcess = inputImage;
+        var monoPrompt = prompt;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                BusyChanged?.Invoke(this, true);
+                StatusChanged?.Invoke(this, "Generating monochrome model…");
+
+                // Ensure WebSocket is connected
+                if (!_comfyClient.IsWebSocketConnected)
+                {
+                    try { await _comfyClient.ConnectWebSocketAsync(ct); } catch { }
+                }
+
+                var seed = Random.Shared.NextInt64();
+                var result = await _comfyClient.GenerateMonochromeAsync(
+                    imageToProcess, monoPrompt, seed, ct);
+
+                if (result.Success && result.ImageData != null)
+                {
+                    _overlayConduit.UpdateImage(result.ImageData);
+                    RhinoDoc.ActiveDoc?.Views.Redraw();
+                }
+
+                RenderCompleted?.Invoke(this, result);
+            }
+            catch (OperationCanceledException)
+            {
+                StatusChanged?.Invoke(this, "Cancelled");
+            }
+            catch (Exception ex)
+            {
+                RenderCompleted?.Invoke(this,
+                    RenderResult.Fail($"Monochrome generation error: {ex.Message}", TimeSpan.Zero));
+            }
+            finally
+            {
+                BusyChanged?.Invoke(this, false);
+            }
+        }, ct);
     }
 
     /// <summary>
