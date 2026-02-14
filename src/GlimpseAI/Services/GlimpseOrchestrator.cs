@@ -87,6 +87,7 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>
     /// Called by the Generate button (on the UI thread).
     /// Captures the viewport immediately, then runs generation on a background thread.
+    /// Supports auto-prompt generation based on the current settings.
     /// </summary>
     public void RequestGenerate(string prompt, PresetType preset, double denoise, int seed = -1)
     {
@@ -106,6 +107,90 @@ public class GlimpseOrchestrator : IDisposable
         Task.Run(() => GenerateFromCaptureAsync(
             capture.viewportImage, capture.depthImage,
             prompt, preset, denoise, seed, ct));
+    }
+
+    /// <summary>
+    /// Generates an auto-prompt based on current settings and scene analysis.
+    /// Returns the generated prompt or the manual prompt if auto-prompt is disabled.
+    /// </summary>
+    public async Task<string> GenerateAutoPromptAsync(string manualPrompt, byte[] viewportImage)
+    {
+        var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+        
+        switch (settings.PromptMode)
+        {
+            case PromptMode.Manual:
+                return manualPrompt;
+                
+            case PromptMode.AutoBasic:
+                try
+                {
+                    var doc = RhinoDoc.ActiveDoc;
+                    var generatedPrompt = AutoPromptBuilder.BuildFromScene(
+                        doc, 
+                        settings.StylePreset, 
+                        settings.CustomStyleSuffix);
+                    
+                    RhinoApp.WriteLine($"Glimpse AI: Auto-prompt (Basic): {generatedPrompt}");
+                    return generatedPrompt;
+                }
+                catch (Exception ex)
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Auto-prompt (Basic) failed: {ex.Message}");
+                    return manualPrompt; // Fallback to manual
+                }
+                
+            case PromptMode.AutoVision:
+                try
+                {
+                    // Check if Florence2 is available
+                    var florenceAvailable = await _comfyClient.IsFlorence2AvailableAsync();
+                    if (!florenceAvailable)
+                    {
+                        RhinoApp.WriteLine("Glimpse AI: Florence2 not available, falling back to AutoBasic");
+                        var doc = RhinoDoc.ActiveDoc;
+                        return AutoPromptBuilder.BuildFromScene(
+                            doc, 
+                            settings.StylePreset, 
+                            settings.CustomStyleSuffix);
+                    }
+                    
+                    // Upload viewport image for Florence2 analysis
+                    var filename = await _comfyClient.UploadImageAsync(
+                        viewportImage, 
+                        $"glimpse_autoprompt_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                    
+                    // Get Florence2 caption
+                    var caption = await _comfyClient.GetFlorence2CaptionAsync(filename, CancellationToken.None);
+                    
+                    if (string.IsNullOrEmpty(caption))
+                    {
+                        RhinoApp.WriteLine("Glimpse AI: Florence2 caption failed, falling back to AutoBasic");
+                        var doc = RhinoDoc.ActiveDoc;
+                        return AutoPromptBuilder.BuildFromScene(
+                            doc, 
+                            settings.StylePreset, 
+                            settings.CustomStyleSuffix);
+                    }
+                    
+                    // Combine caption with style preset
+                    var generatedPrompt = AutoPromptBuilder.CombineVisionCaption(
+                        caption, 
+                        settings.StylePreset, 
+                        settings.CustomStyleSuffix);
+                    
+                    RhinoApp.WriteLine($"Glimpse AI: Auto-prompt (Vision): {generatedPrompt}");
+                    return generatedPrompt;
+                }
+                catch (Exception ex)
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Auto-prompt (Vision) failed: {ex.Message}");
+                    return manualPrompt; // Fallback to manual
+                }
+                
+            default:
+                return manualPrompt;
+        }
     }
 
     /// <summary>
@@ -232,6 +317,7 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>
     /// Core generation pipeline with pre-captured images.
     /// Runs entirely on a background thread; raises events for UI updates.
+    /// Generates auto-prompt if enabled, otherwise uses the provided prompt.
     /// </summary>
     private async Task GenerateFromCaptureAsync(
         byte[] viewportImage, byte[] depthImage,
@@ -259,11 +345,20 @@ public class GlimpseOrchestrator : IDisposable
             }
 
             var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+            
+            // Generate auto-prompt if enabled
+            var finalPrompt = prompt;
+            if (settings.PromptMode != PromptMode.Manual)
+            {
+                StatusChanged?.Invoke(this, "Generating auto-prompt…");
+                finalPrompt = await GenerateAutoPromptAsync(prompt, viewportImage);
+                StatusChanged?.Invoke(this, "Sending to ComfyUI…");
+            }
             var request = new RenderRequest
             {
                 ViewportImage = viewportImage,
                 DepthImage = depthImage,
-                Prompt = prompt,
+                Prompt = finalPrompt,
                 NegativePrompt = settings.DefaultNegativePrompt,
                 Preset = preset,
                 DenoiseStrength = denoise,

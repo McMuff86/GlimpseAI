@@ -26,6 +26,9 @@ public class GlimpsePanel : Panel, IPanel
 
     // Prompt area
     private TextArea _promptTextArea;
+    private DropDown _promptModeDropDown;
+    private DropDown _stylePresetDropDown;
+    private Label _stylePresetLabel;
 
     // Controls row
     private DropDown _presetDropDown;
@@ -158,24 +161,84 @@ public class GlimpsePanel : Panel, IPanel
     }
 
     /// <summary>
-    /// Builds the prompt input area (TextArea, 2-3 lines high).
+    /// Builds the prompt input area (TextArea, 2-3 lines high) with auto-prompt controls.
     /// </summary>
     private Control BuildPromptArea()
     {
         var settings = GetSettings();
+
+        // Prompt Mode dropdown
+        _promptModeDropDown = new DropDown();
+        _promptModeDropDown.Items.Add("Manual");
+        _promptModeDropDown.Items.Add("Auto Basic");
+        _promptModeDropDown.Items.Add("Auto Vision");
+        _promptModeDropDown.SelectedIndex = (int)settings.PromptMode;
+        _promptModeDropDown.SelectedIndexChanged += OnPromptModeChanged;
+
+        // Style Preset dropdown
+        _stylePresetDropDown = new DropDown();
+        _stylePresetDropDown.Items.Add("Architecture");
+        _stylePresetDropDown.Items.Add("Artistic");
+        _stylePresetDropDown.Items.Add("Textured");
+        _stylePresetDropDown.Items.Add("Dramatic");
+        _stylePresetDropDown.Items.Add("Minimal");
+        _stylePresetDropDown.Items.Add("Nature");
+        _stylePresetDropDown.Items.Add("Interior");
+        _stylePresetDropDown.Items.Add("Custom");
+        _stylePresetDropDown.SelectedIndex = (int)settings.StylePreset;
+        _stylePresetDropDown.SelectedIndexChanged += OnStylePresetChanged;
+        _stylePresetDropDown.Visible = settings.PromptMode != PromptMode.Manual;
+
+        _stylePresetLabel = new Label { Text = "Style:" };
+        _stylePresetLabel.Visible = settings.PromptMode != PromptMode.Manual;
 
         _promptTextArea = new TextArea
         {
             Text = settings.DefaultPrompt,
             Height = 54, // ~3 lines
             Wrap = true,
-            SpellCheck = false
+            SpellCheck = false,
+            ReadOnly = settings.PromptMode != PromptMode.Manual
         };
 
-        var label = new Label { Text = "Prompt:", Font = SystemFonts.Bold() };
+        // Update prompt text if auto-mode is active
+        if (settings.PromptMode != PromptMode.Manual)
+        {
+            UpdateAutoPromptDisplay();
+        }
+
+        // Top row with prompt label and mode toggle
+        var topRow = new StackLayout
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Items =
+            {
+                new Label { Text = "Prompt:", Font = SystemFonts.Bold() },
+                new StackLayoutItem(null, expand: true),
+                new Label { Text = "Mode:" },
+                _promptModeDropDown
+            }
+        };
+
+        // Style row (visible only in auto mode)
+        var styleRow = new StackLayout
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Items =
+            {
+                _stylePresetLabel,
+                _stylePresetDropDown,
+                new StackLayoutItem(null, expand: true)
+            }
+        };
 
         var layout = new DynamicLayout { DefaultSpacing = new Size(4, 2) };
-        layout.Add(label);
+        layout.Add(topRow);
+        layout.Add(styleRow);
         layout.Add(_promptTextArea);
         return layout;
     }
@@ -645,6 +708,111 @@ public class GlimpsePanel : Panel, IPanel
     {
         _orchestrator?.Dispose();
         _currentPreviewBitmap?.Dispose();
+    }
+
+    #endregion
+
+    #region Auto-Prompt Event Handlers
+
+    private void OnPromptModeChanged(object sender, EventArgs e)
+    {
+        var promptMode = (PromptMode)_promptModeDropDown.SelectedIndex;
+        var settings = GetSettings();
+        settings.PromptMode = promptMode;
+        GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
+
+        // Update UI visibility
+        _stylePresetDropDown.Visible = promptMode != PromptMode.Manual;
+        _stylePresetLabel.Visible = promptMode != PromptMode.Manual;
+        _promptTextArea.ReadOnly = promptMode != PromptMode.Manual;
+
+        // Update prompt display
+        if (promptMode == PromptMode.Manual)
+        {
+            // Restore manual prompt
+            _promptTextArea.Text = settings.DefaultPrompt;
+        }
+        else
+        {
+            // Show auto-generated prompt
+            UpdateAutoPromptDisplay();
+        }
+
+        // Update auto-mode if active
+        if (_autoModeActive)
+        {
+            _orchestrator.UpdateAutoSettings(
+                _promptTextArea.Text,
+                (PresetType)_presetDropDown.SelectedIndex,
+                GetCurrentDenoise(),
+                ParseSeed(_seedTextBox.Text));
+        }
+    }
+
+    private void OnStylePresetChanged(object sender, EventArgs e)
+    {
+        var stylePreset = (StylePreset)_stylePresetDropDown.SelectedIndex;
+        var settings = GetSettings();
+        settings.StylePreset = stylePreset;
+        GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
+
+        // Update prompt display if in auto mode
+        if (settings.PromptMode != PromptMode.Manual)
+        {
+            UpdateAutoPromptDisplay();
+        }
+
+        // Update auto-mode if active
+        if (_autoModeActive)
+        {
+            _orchestrator.UpdateAutoSettings(
+                _promptTextArea.Text,
+                (PresetType)_presetDropDown.SelectedIndex,
+                GetCurrentDenoise(),
+                ParseSeed(_seedTextBox.Text));
+        }
+    }
+
+    /// <summary>
+    /// Updates the prompt text area with an auto-generated prompt for preview.
+    /// </summary>
+    private void UpdateAutoPromptDisplay()
+    {
+        var settings = GetSettings();
+        
+        if (settings.PromptMode == PromptMode.Manual)
+            return;
+
+        try
+        {
+            string previewPrompt;
+            
+            if (settings.PromptMode == PromptMode.AutoBasic)
+            {
+                var doc = RhinoDoc.ActiveDoc;
+                previewPrompt = AutoPromptBuilder.BuildFromScene(
+                    doc, 
+                    settings.StylePreset, 
+                    settings.CustomStyleSuffix);
+            }
+            else // AutoVision
+            {
+                // For vision mode, show a placeholder until actual generation
+                var doc = RhinoDoc.ActiveDoc;
+                var basicPrompt = AutoPromptBuilder.BuildFromScene(
+                    doc, 
+                    settings.StylePreset, 
+                    settings.CustomStyleSuffix);
+                previewPrompt = $"[Vision Analysis + Style] Preview: {basicPrompt}";
+            }
+
+            _promptTextArea.Text = previewPrompt;
+        }
+        catch (Exception ex)
+        {
+            _promptTextArea.Text = $"[Auto-Prompt Error: {ex.Message}]";
+            RhinoApp.WriteLine($"Glimpse AI: Auto-prompt preview failed: {ex.Message}");
+        }
     }
 
     #endregion

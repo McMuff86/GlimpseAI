@@ -31,6 +31,13 @@ public class GlimpseSettingsDialog : Dialog
     private TextBox _controlNetModelTextBox;
     private CheckBox _useDepthPreprocessorCheckBox;
 
+    // --- Auto-Prompt Settings ---
+    private DropDown _promptModeDropDown;
+    private DropDown _stylePresetDropDown;
+    private TextArea _customStyleSuffixTextArea;
+    private Label _stylePresetLabel;
+    private Label _customStyleLabel;
+
     public GlimpseSettingsDialog()
     {
         Title = "Glimpse AI Settings";
@@ -156,6 +163,36 @@ public class GlimpseSettingsDialog : Dialog
             Text = "Use depth preprocessor (DepthAnything_V2)"
         };
 
+        // --- Auto-Prompt Settings ---
+        _promptModeDropDown = new DropDown();
+        _promptModeDropDown.Items.Add("Manual");
+        _promptModeDropDown.Items.Add("Auto Basic");
+        _promptModeDropDown.Items.Add("Auto Vision");
+        _promptModeDropDown.SelectedIndexChanged += OnPromptModeChanged;
+
+        _stylePresetLabel = new Label { Text = "Style Preset:" };
+        
+        _stylePresetDropDown = new DropDown();
+        _stylePresetDropDown.Items.Add("Architecture");
+        _stylePresetDropDown.Items.Add("Artistic");
+        _stylePresetDropDown.Items.Add("Textured");
+        _stylePresetDropDown.Items.Add("Dramatic");
+        _stylePresetDropDown.Items.Add("Minimal");
+        _stylePresetDropDown.Items.Add("Nature");
+        _stylePresetDropDown.Items.Add("Interior");
+        _stylePresetDropDown.Items.Add("Custom");
+        _stylePresetDropDown.SelectedIndexChanged += OnStylePresetChanged;
+
+        _customStyleLabel = new Label { Text = "Custom Style Suffix:" };
+        
+        _customStyleSuffixTextArea = new TextArea
+        {
+            Height = 40,
+            Wrap = true,
+            SpellCheck = false,
+            PlaceholderText = "Custom style keywords (only used when Style Preset is 'Custom')"
+        };
+
         // --- Buttons ---
         var okButton = new Button { Text = "OK" };
         okButton.Click += OnOkClicked;
@@ -188,6 +225,16 @@ public class GlimpseSettingsDialog : Dialog
         layout.AddRow(_defaultPromptTextArea);
         layout.AddRow(new Label { Text = "Denoise Strength:" });
         layout.AddRow(_denoiseStepper);
+
+        layout.AddSpace();
+
+        layout.AddRow(new Label { Text = "Auto-Prompt", Font = SystemFonts.Bold() });
+        layout.AddRow(new Label { Text = "Prompt Mode:" });
+        layout.AddRow(_promptModeDropDown);
+        layout.AddRow(_stylePresetLabel);
+        layout.AddRow(_stylePresetDropDown);
+        layout.AddRow(_customStyleLabel);
+        layout.AddRow(_customStyleSuffixTextArea);
 
         layout.AddSpace();
 
@@ -247,6 +294,13 @@ public class GlimpseSettingsDialog : Dialog
         _controlNetStrengthStepper.Value = settings.ControlNetStrength;
         _controlNetModelTextBox.Text = settings.ControlNetModel ?? "";
         _useDepthPreprocessorCheckBox.Checked = settings.UseDepthPreprocessor;
+
+        // Auto-Prompt settings
+        _promptModeDropDown.SelectedIndex = (int)settings.PromptMode;
+        _stylePresetDropDown.SelectedIndex = (int)settings.StylePreset;
+        _customStyleSuffixTextArea.Text = settings.CustomStyleSuffix ?? "";
+        
+        UpdateAutoPromptVisibility();
     }
 
     /// <summary>
@@ -291,6 +345,36 @@ public class GlimpseSettingsDialog : Dialog
     }
 
     /// <summary>
+    /// Updates visibility of auto-prompt controls based on the selected mode.
+    /// </summary>
+    private void UpdateAutoPromptVisibility()
+    {
+        var isAuto = _promptModeDropDown.SelectedIndex != 0; // Not Manual
+        _stylePresetLabel.Visible = isAuto;
+        _stylePresetDropDown.Visible = isAuto;
+        
+        var isCustomStyle = isAuto && _stylePresetDropDown.SelectedIndex == 7; // Custom
+        _customStyleLabel.Visible = isCustomStyle;
+        _customStyleSuffixTextArea.Visible = isCustomStyle;
+    }
+
+    /// <summary>
+    /// Handles prompt mode dropdown changes.
+    /// </summary>
+    private void OnPromptModeChanged(object sender, EventArgs e)
+    {
+        UpdateAutoPromptVisibility();
+    }
+
+    /// <summary>
+    /// Handles style preset dropdown changes.
+    /// </summary>
+    private void OnStylePresetChanged(object sender, EventArgs e)
+    {
+        UpdateAutoPromptVisibility();
+    }
+
+    /// <summary>
     /// Saves settings and closes the dialog.
     /// </summary>
     private void OnOkClicked(object sender, EventArgs e)
@@ -310,7 +394,12 @@ public class GlimpseSettingsDialog : Dialog
             UseControlNet = _useControlNetCheckBox.Checked ?? false,
             ControlNetStrength = _controlNetStrengthStepper.Value,
             ControlNetModel = string.IsNullOrWhiteSpace(_controlNetModelTextBox.Text) ? "" : _controlNetModelTextBox.Text,
-            UseDepthPreprocessor = _useDepthPreprocessorCheckBox.Checked ?? false
+            UseDepthPreprocessor = _useDepthPreprocessorCheckBox.Checked ?? false,
+
+            // Auto-Prompt settings
+            PromptMode = (PromptMode)_promptModeDropDown.SelectedIndex,
+            StylePreset = (StylePreset)_stylePresetDropDown.SelectedIndex,
+            CustomStyleSuffix = _customStyleSuffixTextArea.Text ?? ""
         };
 
         GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
