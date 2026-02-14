@@ -706,7 +706,7 @@ public class GlimpsePanel : Panel, IPanel
         var fromFile = new ButtonMenuItem { Text = "Load Image..." };
         fromFile.Click += (s, a) =>
         {
-            var dialog = new OpenFileDialog
+            var dialog = new Eto.Forms.OpenFileDialog
             {
                 Title = "Select Image for Monochrome Conversion",
                 Filters = { new FileFilter("Images", ".png", ".jpg", ".jpeg", ".bmp", ".webp") }
@@ -764,7 +764,7 @@ public class GlimpsePanel : Panel, IPanel
         var fromFile = new ButtonMenuItem { Text = "Load Image..." };
         fromFile.Click += (s, a) =>
         {
-            var dialog = new OpenFileDialog
+            var dialog = new Eto.Forms.OpenFileDialog
             {
                 Title = "Select Image for 3D Mesh Generation",
                 Filters = { new FileFilter("Images", ".png", ".jpg", ".jpeg", ".bmp", ".webp") }
