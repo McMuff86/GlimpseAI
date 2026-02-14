@@ -344,34 +344,34 @@ public class GlimpsePanel : Panel, IPanel
             Width = 70
         };
 
+        _recommendedLabel = new Label
+        {
+            Text = GetRecommendedText(),
+            TextColor = Color.FromArgb(0x88, 0x88, 0x88),
+            Width = 200
+        };
+
         var layout = new StackLayout
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Items =
-            {
-                new Label { Text = "Preset:" },
-                _presetDropDown,
-                new Label { Text = "Pipeline:" },
-                _pipelineDropDown,
-                new Label { Text = "Model:" },
-                _modelDropDown,
-                new Label { Text = "Denoise:" },
-                _denoiseSlider,
-                _denoiseValueBox,
-                new Label { Text = "CFG:" },
-                _cfgSlider,
-                _cfgValueBox,
-                new Label { Text = "Seed:" },
-                _seedTextBox,
-                _recommendedLabel = new Label
-                {
-                    Text = GetRecommendedText(),
-                    TextColor = Color.FromArgb(0x88, 0x88, 0x88),
-                    Width = 200
-                }
-            }
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        layout.Items.Add(new Label { Text = "Preset:" });
+        layout.Items.Add(_presetDropDown);
+        layout.Items.Add(new Label { Text = "Pipeline:" });
+        layout.Items.Add(_pipelineDropDown);
+        layout.Items.Add(new Label { Text = "Model:" });
+        layout.Items.Add(_modelDropDown);
+        layout.Items.Add(new Label { Text = "Denoise:" });
+        layout.Items.Add(_denoiseSlider);
+        layout.Items.Add(_denoiseValueBox);
+        layout.Items.Add(new Label { Text = "CFG:" });
+        layout.Items.Add(_cfgSlider);
+        layout.Items.Add(_cfgValueBox);
+        layout.Items.Add(new Label { Text = "Seed:" });
+        layout.Items.Add(_seedTextBox);
+        layout.Items.Add(_recommendedLabel);
         };
 
         return layout;
