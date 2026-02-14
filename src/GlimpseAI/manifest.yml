@@ -1,17 +1,14 @@
----
 name: glimpseai
 version: 0.1.0
 authors:
-  - Adrian Muff
-description: >-
-  Real-time AI preview rendering for Rhino 8.
-  Captures your viewport, sends it to a local ComfyUI server,
-  and returns a photorealistic AI-rendered image in seconds.
-url: https://github.com/McMuff86/GlimpseAI
+- Adrian Muff
+description: "Real-time AI preview rendering for Rhino 8. Captures your viewport, sends it to a local ComfyUI server, and returns a photorealistic AI-rendered image in seconds."
+url: "https://github.com/McMuff86/GlimpseAI"
+icon: misc/icon.png
 keywords:
-  - ai
-  - rendering
-  - preview
-  - comfyui
-  - architecture
-  - visualization
+- ai
+- rendering
+- preview
+- comfyui
+- architecture
+- visualization
