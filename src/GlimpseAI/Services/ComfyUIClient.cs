@@ -375,89 +375,144 @@ public class ComfyUIClient : IDisposable
     /// <summary>
     /// Waits for completion using WebSocket messages for instant detection.
     /// Progress and latent previews are delivered via WebSocket; final image is downloaded via HTTP.
+    /// Uses dynamic buffer allocation to handle large preview images safely.
     /// </summary>
     private async Task<RenderResult> WaitForCompletionWebSocketAsync(
         string promptId, RenderRequest request, int seed, Stopwatch stopwatch, CancellationToken ct)
     {
-        var buffer = new byte[4 * 1024 * 1024]; // 4 MB buffer for preview images
+        const int InitialBufferSize = 4 * 1024 * 1024; // 4 MB initial buffer
+        const int MaxBufferSize = 32 * 1024 * 1024;    // 32 MB max buffer
+        
+        var buffer = ArrayPool<byte>.Shared.Rent(InitialBufferSize);
+        var currentBufferSize = InitialBufferSize;
 
-        var deadline = DateTime.UtcNow + MaxWaitTime;
-
-        while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+        try
         {
-            if (_ws == null || _ws.State != WebSocketState.Open)
+            var deadline = DateTime.UtcNow + MaxWaitTime;
+
+            while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
             {
-                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                if (_ws == null || _ws.State != WebSocketState.Open)
+                {
+                    return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                }
+
+                WebSocketReceiveResult wsResult;
+                byte[] messageBuffer = buffer;
+                
+                try
+                {
+                    // Start receiving with current buffer
+                    var segment = new ArraySegment<byte>(buffer, 0, currentBufferSize);
+                    wsResult = await _ws.ReceiveAsync(segment, ct);
+                    
+                    // Check if message was truncated and we need a larger buffer
+                    if (!wsResult.EndOfMessage)
+                    {
+                        // Message is larger than current buffer - need to receive in chunks
+                        using var ms = new System.IO.MemoryStream();
+                        ms.Write(buffer, 0, wsResult.Count);
+                        
+                        while (!wsResult.EndOfMessage && !ct.IsCancellationRequested)
+                        {
+                            wsResult = await _ws.ReceiveAsync(segment, ct);
+                            ms.Write(buffer, 0, wsResult.Count);
+                            
+                            // Prevent excessive memory usage
+                            if (ms.Length > MaxBufferSize)
+                            {
+                                Rhino.RhinoApp.WriteLine($"Glimpse AI: WebSocket message too large ({ms.Length} bytes), skipping");
+                                ms.SetLength(0); // Clear the stream
+                                break;
+                            }
+                        }
+                        
+                        if (ms.Length > 0 && ms.Length <= MaxBufferSize)
+                        {
+                            messageBuffer = ms.ToArray();
+                            wsResult = new WebSocketReceiveResult(
+                                (int)ms.Length, 
+                                wsResult.MessageType, 
+                                true,
+                                wsResult.CloseStatus,
+                                wsResult.CloseStatusDescription);
+                        }
+                        else
+                        {
+                            continue; // Skip this oversized message
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
+                }
+                catch (WebSocketException ex)
+                {
+                    Rhino.RhinoApp.WriteLine($"Glimpse AI: WebSocket error: {ex.Message}");
+                    return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                }
+
+                if (wsResult.MessageType == WebSocketMessageType.Text)
+                {
+                    var text = Encoding.UTF8.GetString(messageBuffer, 0, wsResult.Count);
+                    HandleTextMessage(text, promptId, out bool completed, out bool error);
+
+                    if (error)
+                    {
+                        return RenderResult.Fail(
+                            "ComfyUI reported an error during generation. Check ComfyUI console for details.",
+                            stopwatch.Elapsed);
+                    }
+
+                    if (completed)
+                    {
+                        // Download the final image via HTTP (SaveImage wrote it to disk)
+                        var imageInfo = await GetOutputImageInfoAsync(promptId);
+                        if (imageInfo == null)
+                        {
+                            return RenderResult.Fail("Generation completed but no output image found.", stopwatch.Elapsed);
+                        }
+
+                        var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
+                        stopwatch.Stop();
+                        return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed);
+                    }
+                }
+                else if (wsResult.MessageType == WebSocketMessageType.Binary)
+                {
+                    // Binary messages from ComfyUI: 4-byte big-endian type header + image data
+                    // Type 1 = latent preview image (JPEG/PNG)
+                    if (wsResult.Count > 8)
+                    {
+                        // Read type as big-endian uint32
+                        int eventType = (messageBuffer[0] << 24) | (messageBuffer[1] << 16) | (messageBuffer[2] << 8) | messageBuffer[3];
+
+                        if (eventType == 1 || eventType == 2)
+                        {
+                            // Skip 8-byte header (4 bytes type + 4 bytes format)
+                            var pngData = new byte[wsResult.Count - 8];
+                            Array.Copy(messageBuffer, 8, pngData, 0, pngData.Length);
+                            PreviewImageReceived?.Invoke(this, new PreviewImageEventArgs { ImageData = pngData });
+                        }
+                    }
+                }
+                else if (wsResult.MessageType == WebSocketMessageType.Close)
+                {
+                    return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                }
             }
 
-            WebSocketReceiveResult wsResult;
-            try
-            {
-                wsResult = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
-            }
-            catch (OperationCanceledException)
-            {
+            if (ct.IsCancellationRequested)
                 return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
-            }
-            catch (WebSocketException)
-            {
-                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
-            }
 
-            if (wsResult.MessageType == WebSocketMessageType.Text)
-            {
-                var text = Encoding.UTF8.GetString(buffer, 0, wsResult.Count);
-                HandleTextMessage(text, promptId, out bool completed, out bool error);
-
-                if (error)
-                {
-                    return RenderResult.Fail(
-                        "ComfyUI reported an error during generation. Check ComfyUI console for details.",
-                        stopwatch.Elapsed);
-                }
-
-                if (completed)
-                {
-                    // Download the final image via HTTP (SaveImage wrote it to disk)
-                    var imageInfo = await GetOutputImageInfoAsync(promptId);
-                    if (imageInfo == null)
-                    {
-                        return RenderResult.Fail("Generation completed but no output image found.", stopwatch.Elapsed);
-                    }
-
-                    var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
-                    stopwatch.Stop();
-                    return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed);
-                }
-            }
-            else if (wsResult.MessageType == WebSocketMessageType.Binary)
-            {
-                // Binary messages from ComfyUI: 4-byte big-endian type header + image data
-                // Type 1 = latent preview image (JPEG/PNG)
-                if (wsResult.Count > 8)
-                {
-                    // Read type as big-endian uint32
-                    int eventType = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
-
-                    if (eventType == 1 || eventType == 2)
-                    {
-                        // Skip 8-byte header (4 bytes type + 4 bytes format)
-                        var pngData = new byte[wsResult.Count - 8];
-                        Array.Copy(buffer, 8, pngData, 0, pngData.Length);
-                        PreviewImageReceived?.Invoke(this, new PreviewImageEventArgs { ImageData = pngData });
-                    }
-                }
-            }
-            else if (wsResult.MessageType == WebSocketMessageType.Close)
-            {
-                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
-            }
+            return RenderResult.Fail("Generation timed out.", stopwatch.Elapsed);
         }
-
-        if (ct.IsCancellationRequested)
-            return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
-
-        return RenderResult.Fail("Generation timed out.", stopwatch.Elapsed);
+        finally
+        {
+            // Return rented buffer to pool
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>
