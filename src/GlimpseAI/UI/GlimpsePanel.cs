@@ -41,6 +41,7 @@ public class GlimpsePanel : Panel, IPanel
     private bool _updatingFromSlider;
     private bool _updatingFromTextBox;
     private TextBox _seedTextBox;
+    private Label _recommendedLabel;
 
     // Overlay controls
     private Button _overlayToggleButton;
@@ -354,7 +355,13 @@ public class GlimpsePanel : Panel, IPanel
                 _cfgSlider,
                 _cfgValueBox,
                 new Label { Text = "Seed:" },
-                _seedTextBox
+                _seedTextBox,
+                _recommendedLabel = new Label
+                {
+                    Text = GetRecommendedText(),
+                    TextColor = Color.FromArgb(0x88, 0x88, 0x88),
+                    Width = 200
+                }
             }
         };
 
@@ -733,6 +740,7 @@ public class GlimpsePanel : Panel, IPanel
                 GetCurrentCfg(),
                 ParseSeed(_seedTextBox.Text));
         }
+        UpdateRecommendedLabel();
     }
 
     private async void OnPipelineChanged(object sender, EventArgs e)
@@ -757,6 +765,7 @@ public class GlimpsePanel : Panel, IPanel
         {
             RhinoApp.WriteLine($"Glimpse AI: Pipeline switch failed: {ex.Message}");
         }
+        UpdateRecommendedLabel();
     }
 
     private void OnDenoiseSliderChanged(object sender, EventArgs e)
@@ -1018,6 +1027,33 @@ public class GlimpsePanel : Panel, IPanel
     private double GetCurrentCfg()
     {
         return 1.0 + ((_cfgSlider.Value - 10) / 190.0) * 19.0;
+    }
+
+    private string GetRecommendedText()
+    {
+        var pipeline = _pipelineDropDown?.SelectedIndex switch
+        {
+            1 => "flux",
+            2 => "sdxl",
+            _ => _orchestrator != null && _orchestrator.IsUsingFlux ? "flux" : "sdxl"
+        };
+        var preset = _presetDropDown?.SelectedIndex ?? 1;
+
+        if (pipeline == "flux")
+        {
+            return preset == 0
+                ? "💡 Flux: CFG 1.0-2.0 | Denoise 0.5-0.8"
+                : "💡 Flux: CFG 2.0-4.0 | Denoise 1.0";
+        }
+        return preset == 0
+            ? "💡 SDXL: CFG 5-8 | Denoise 0.2-0.5"
+            : "💡 SDXL: CFG 7-12 | Denoise 0.3-0.6";
+    }
+
+    private void UpdateRecommendedLabel()
+    {
+        if (_recommendedLabel != null)
+            _recommendedLabel.Text = GetRecommendedText();
     }
 
     /// <summary>

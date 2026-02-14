@@ -20,6 +20,7 @@ public class GlimpseOrchestrator : IDisposable
     private bool _disposed;
     private bool _isFluxAvailable;
     private bool _useFlux;
+    public bool IsUsingFlux => _useFlux;
 
     // Auto-mode settings (updated from UI)
     private string _autoPrompt;
