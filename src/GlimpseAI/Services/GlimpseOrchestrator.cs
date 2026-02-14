@@ -114,13 +114,18 @@ public class GlimpseOrchestrator : IDisposable
                     }
                 }
 
-                if (string.IsNullOrEmpty(settings.FluxControlNetModel))
+                // Always re-detect Flux ControlNet (model paths may change between sessions)
                 {
                     var detectedControlNet = await _comfyClient.GetFluxControlNetAsync();
                     if (!string.IsNullOrEmpty(detectedControlNet))
                     {
                         settings.FluxControlNetModel = detectedControlNet;
                         RhinoApp.WriteLine($"Glimpse AI: Auto-detected Flux ControlNet: {detectedControlNet}");
+                    }
+                    else
+                    {
+                        settings.FluxControlNetModel = "";
+                        RhinoApp.WriteLine("Glimpse AI: No Flux ControlNet found");
                     }
                 }
 
