@@ -13,13 +13,43 @@ Powered by Stable Diffusion and Flux via ComfyUI.
 
 ## ✨ Features
 
+### ✅ **Working (Stable)**
 - **One-Click Rendering** – Generate AI renderings from any Rhino viewport
-- **Live Preview** – Auto-generates when you move the camera (with smart debouncing)
 - **Multiple Presets** – Fast (1-2s), Balanced (5-8s), High Quality (20-30s), 4K Export (45-60s)
-- **Smart Prompts** – Auto-generates prompts from scene materials (wood, glass, concrete, metal)
 - **Local Processing** – Runs on your GPU, no cloud costs, no subscriptions
-- **Rhino Integration** – Native dockable panel via Eto.Forms, no separate windows
-- **Depth-Aware** – Uses viewport depth information for ControlNet-guided generation
+- **Rhino Integration** – Native dockable panel via Eto.Forms
+- **WebSocket + HTTP Fallback** – Robust ComfyUI communication
+- **Real-time Overlay** – AI results displayed directly in viewport
+- **Thread-Safe Architecture** – No more crashes from UI thread violations
+
+### 🚧 **In Development** 
+- **Live Preview** – Auto-generates when you move the camera *(viewport watcher implemented, needs stability testing)*
+- **Smart Prompts** – Auto-generates prompts from scene materials *(planned)*
+- **Advanced Depth Processing** – Enhanced depth capture without display mode switching *(in progress)*
+
+### 🔬 **Experimental**
+- **Depth-Aware Generation** – Uses viewport depth via Arctic mode *(functional but can cause viewport flickering)*
+
+---
+
+## ⚠️ Known Issues
+
+### **Critical (Fixed in fix/stability-and-crashes branch)**
+- ~~Thread-safety violations causing Rhino crashes~~ ✅ **FIXED**
+- ~~DisplayBitmap creation on background threads~~ ✅ **FIXED** 
+- ~~Viewport manipulation from non-UI threads~~ ✅ **FIXED**
+
+### **Minor Issues**
+- **Depth Capture Flickering** – Arctic mode switching can cause brief viewport flicker
+- **Large Image Memory** – High-resolution captures (>2K) may cause memory pressure
+- **ComfyUI Offline** – Plugin doesn't gracefully handle server disconnection yet
+
+### **Performance Notes**
+- **VRAM Requirements** – 4K presets need 8GB+ VRAM to avoid OOM errors
+- **First Generation Slow** – Model loading causes ~10s delay on first run
+- **Background Processing** – Multiple rapid viewport changes may queue requests
+
+> See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for detailed fixes and workarounds.
 
 ---
 
@@ -137,30 +167,46 @@ Open settings via the `GlimpseSettings` command or the gear icon in the panel.
 ## 📐 Architecture
 
 ```
-┌────────────────────────────────────────────────────┐
-│                    RHINO 8                          │
-│                                                    │
-│  ┌──────────────┐    ┌──────────────────────────┐  │
-│  │  Viewport     │───→│   GlimpseAI Panel       │  │
-│  │  [3D Scene]   │    │   [AI Preview Image]    │  │
-│  └──────┬───────┘    └─────────┬────────────────┘  │
-│         │                      │                    │
-│  ┌──────▼──────────────────────▼─────────────────┐ │
-│  │         ViewportWatcher Service                │ │
-│  │  Camera Change Detection → Debounce → Capture  │ │
-│  └──────────────────┬────────────────────────────┘ │
-│                     │ HTTP                          │
-└─────────────────────┼──────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                       RHINO 8 HOST                             │
+├─────────────────────────────────────────────────────────────────┤
+│  UI LAYER (UI Thread)                                          │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────────┐ │
+│  │ GlimpsePanel│  │ViewportCapture│  │GlimpseOverlayConduit   │ │
+│  │ - Controls  │  │ - Screenshots │  │ - AI Result Display    │ │
+│  │ - Preview   │  │ - Depth Mode  │  │ - Viewport Overlay     │ │
+│  └─────┬───────┘  └──────┬───────┘  └──────┬──────────────────┘ │
+│        │                 │                 │                    │
+│        ▼                 ▼                 ▼                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │              GlimpseOrchestrator                            │ │
+│  │         (Event-Driven Coordinator)                         │ │
+│  │  ┌─────────────┐ ┌──────────────┐ ┌────────────────────┐   │ │
+│  │  │ViewportWatch│ │WorkflowBuild │ │ Thread Marshalling │   │ │
+│  │  │- Events     │ │- JSON Presets│ │ - UI ↔ Background  │   │ │
+│  │  └─────────────┘ └──────────────┘ └────────────────────┘   │ │
+│  └─────────────────────┬───────────────────────────────────────┘ │
+│                        │ WebSocket/HTTP                          │
+└────────────────────────┼─────────────────────────────────────────┘
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   ComfyUIClient                                 │
+│  ┌─────────────┐    ┌─────────────┐    ┌──────────────────────┐ │
+│  │  WebSocket  │    │    HTTP     │    │   Progress Monitor   │ │
+│  │- Real-time  │    │- Fallback   │    │ - Queue Status      │ │
+│  │- Progress   │    │- Upload     │    │ - Error Recovery    │ │
+│  └─────────────┘    └─────────────┘    └──────────────────────┘ │
+└─────────────────────┬───────────────────────────────────────────┘
                       ▼
-┌────────────────────────────────────────────────────┐
-│            ComfyUI (localhost:8188)                 │
-│  LoadImage → VAEEncode → KSampler → VAEDecode      │
-│                              ↑                      │
-│  CLIPTextEncode (prompt) ────┘                      │
-│  CheckpointLoader ───────────┘                      │
-│                    → SaveImage → Download            │
-└────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│              ComfyUI Server (External)                         │
+│  Workflow: LoadImage → ControlNet → KSampler → SaveImage       │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+> **Thread-Safety:** All Rhino API calls happen on UI Thread. Background threads handle only ComfyUI communication and workflow building.
+
+> **Full Architecture:** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed component breakdown and data flow.
 
 ### Key Components
 
@@ -208,32 +254,45 @@ GlimpseAI/
 
 ## 🗺️ Roadmap
 
-### Phase 1: MVP – Static Generate ✅
+### Phase 1: Core Stability ✅ **COMPLETED**
 - [x] Plugin project scaffold (Rhino 8, .NET 7, Eto.Forms)
-- [x] Basic panel with image display
+- [x] Basic panel with image display and viewport overlay
 - [x] Generate button: Viewport Capture → ComfyUI → Result
 - [x] Workflow presets (Fast/Balanced/HQ/4K)
 - [x] Settings dialog with connection test
+- [x] **Thread-safety fixes** – No more crashes from UI violations
+- [x] **WebSocket + HTTP fallback** – Robust ComfyUI communication
+- [x] **Real-time overlay display** – AI results in viewport
 
-### Phase 2: Live Preview
-- [ ] Auto-generate on camera change (ViewportWatcher)
-- [ ] Toggle manual / auto mode in panel
-- [ ] Depth buffer capture for ControlNet
-- [ ] ControlNet integration (depth-guided generation)
+### Phase 2: Live Preview & Stability 🚧 **IN PROGRESS**
+- [x] ViewportWatcher implementation *(needs testing)*
+- [ ] **Stable auto-generate** on camera change
+- [ ] **Improved depth capture** without arctic mode flicker
+- [ ] **Graceful error handling** for ComfyUI offline scenarios
+- [ ] **Memory optimization** for large images
+- [ ] **Progress cancellation** on new viewport changes
 
-### Phase 3: Smart Features
-- [ ] Auto-prompt from scene materials
-- [ ] Denoise strength slider in panel
-- [ ] Save/export rendered images
-- [ ] Keyboard shortcut for quick generation
+### Phase 3: Enhanced Features 📋 **PLANNED**
+- [ ] **Smart material detection** → Auto-prompt generation
+- [ ] **Denoise strength slider** in panel
+- [ ] **Save/export** rendered images with metadata
+- [ ] **Keyboard shortcuts** for quick generation
+- [ ] **VRAM-aware resolution limits** 
+- [ ] **Background processing queue** for multiple concurrent requests
 
-### Phase 4: Polish & Product
-- [ ] Combined ControlNet (Depth + Canny + Normal)
-- [ ] Proper depth buffer via RhinoCommon API
-- [ ] Cancel running generation on new camera change
-- [ ] Progress indicator in panel
-- [ ] Food4Rhino listing
-- [ ] Demo video
+### Phase 4: Advanced AI Integration 🔮 **FUTURE**
+- [ ] **Multiple ControlNet support** (Depth + Canny + Normal)
+- [ ] **Native depth buffer** via RhinoCommon (no arctic mode)
+- [ ] **Real-time streaming** for ultra-fast preview
+- [ ] **Cloud processing options** for resource-limited machines
+- [ ] **Multi-AI backend support** (not just ComfyUI)
+
+### Phase 5: Polish & Distribution 🚀 **RELEASE**
+- [ ] **Comprehensive documentation** 
+- [ ] **Video tutorials** and usage examples
+- [ ] **Food4Rhino listing** 
+- [ ] **Professional installer**
+- [ ] **Performance benchmarking** across different hardware
 
 ---
 

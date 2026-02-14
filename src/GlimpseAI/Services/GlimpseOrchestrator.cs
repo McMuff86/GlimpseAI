@@ -54,8 +54,18 @@ public class GlimpseOrchestrator : IDisposable
         _comfyClient.ProgressChanged += (s, e) => ProgressChanged?.Invoke(this, e);
         _comfyClient.PreviewImageReceived += OnPreviewImageFromComfy;
 
-        // Connect WebSocket on a background thread
-        Task.Run(ConnectWebSocketAsync);
+        // Connect WebSocket on a background thread with error handling
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ConnectWebSocketAsync();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Initial WebSocket connection failed: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>
@@ -228,6 +238,8 @@ public class GlimpseOrchestrator : IDisposable
         string prompt, PresetType preset, double denoise, int seed,
         CancellationToken ct)
     {
+        var startMemory = GC.GetTotalMemory(false);
+        
         try
         {
             BusyChanged?.Invoke(this, true);
@@ -281,6 +293,21 @@ public class GlimpseOrchestrator : IDisposable
         finally
         {
             BusyChanged?.Invoke(this, false);
+            
+            // Memory usage tracking for leak detection
+            var endMemory = GC.GetTotalMemory(false);
+            var memoryIncrease = endMemory - startMemory;
+            if (memoryIncrease > 10 * 1024 * 1024) // > 10 MB increase
+            {
+                GC.Collect(); // Force collection to release temporary objects
+                var afterGcMemory = GC.GetTotalMemory(true);
+                var actualIncrease = afterGcMemory - startMemory;
+                
+                if (actualIncrease > 5 * 1024 * 1024) // > 5 MB after GC
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Memory usage increased by {actualIncrease / (1024 * 1024)}MB after generation");
+                }
+            }
         }
     }
 
@@ -307,55 +334,127 @@ public class GlimpseOrchestrator : IDisposable
     {
         if (_disposed) return;
 
-        CancelCurrentGeneration();
-        _currentGenerationCts = new CancellationTokenSource();
-        var ct = _currentGenerationCts.Token;
-
-        Task.Run(async () =>
+        try
         {
-            byte[] viewportImage = null;
-            byte[] depthImage = null;
+            CancelCurrentGeneration();
+            _currentGenerationCts = new CancellationTokenSource();
+            var ct = _currentGenerationCts.Token;
 
-            var tcs = new TaskCompletionSource<bool>();
-            RhinoApp.InvokeOnUiThread(new Action(() =>
+            // Start background task with proper error handling
+            _ = Task.Run(async () =>
             {
                 try
                 {
-                    var capture = CaptureCurrentViewport(_autoPreset);
-                    viewportImage = capture.viewportImage;
-                    depthImage = capture.depthImage;
+                    byte[] viewportImage = null;
+                    byte[] depthImage = null;
+
+                    var tcs = new TaskCompletionSource<bool>();
+                    RhinoApp.InvokeOnUiThread(new Action(() =>
+                    {
+                        try
+                        {
+                            if (_disposed || ct.IsCancellationRequested)
+                            {
+                                tcs.TrySetResult(false);
+                                return;
+                            }
+
+                            var capture = CaptureCurrentViewport(_autoPreset);
+                            viewportImage = capture.viewportImage;
+                            depthImage = capture.depthImage;
+                            tcs.TrySetResult(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            RhinoApp.WriteLine($"Glimpse AI: Viewport capture error in auto-mode: {ex.Message}");
+                            tcs.TrySetException(ex);
+                        }
+                    }));
+
+                    var captureSucceeded = await tcs.Task;
+                    if (!captureSucceeded || ct.IsCancellationRequested)
+                        return;
+
+                    if (viewportImage == null || viewportImage.Length == 0)
+                    {
+                        StatusChanged?.Invoke(this, "Auto mode: Failed to capture viewport");
+                        return;
+                    }
+
+                    await GenerateFromCaptureAsync(
+                        viewportImage, depthImage,
+                        _autoPrompt, _autoPreset, _autoDenoise, _autoSeed, ct);
                 }
-                finally
+                catch (OperationCanceledException)
                 {
-                    tcs.TrySetResult(true);
+                    // Normal cancellation, no error logging needed
                 }
-            }));
-
-            await tcs.Task;
-
-            if (viewportImage == null || viewportImage.Length == 0) return;
-
-            await GenerateFromCaptureAsync(
-                viewportImage, depthImage,
-                _autoPrompt, _autoPreset, _autoDenoise, _autoSeed, ct);
-        });
+                catch (Exception ex)
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: Auto-generation error: {ex.Message}");
+                    
+                    try
+                    {
+                        StatusChanged?.Invoke(this, $"Auto mode error: {ex.Message}");
+                        BusyChanged?.Invoke(this, false);
+                    }
+                    catch
+                    {
+                        // Prevent recursive exceptions in event handlers
+                    }
+                }
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"Glimpse AI: Error starting auto-generation: {ex.Message}");
+        }
     }
 
     /// <summary>
-    /// Cancels any in-flight generation request.
+    /// Cancels any in-flight generation request, including server-side interruption.
     /// </summary>
     private void CancelCurrentGeneration()
     {
-        try
-        {
-            _currentGenerationCts?.Cancel();
-            _currentGenerationCts?.Dispose();
-        }
-        catch
-        {
-            // ignore
-        }
+        var ctsToDispose = _currentGenerationCts;
         _currentGenerationCts = null;
+        
+        if (ctsToDispose != null)
+        {
+            try
+            {
+                if (!ctsToDispose.IsCancellationRequested)
+                {
+                    ctsToDispose.Cancel();
+                    
+                    // Also interrupt server-side generation (fire and forget)
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _comfyClient.InterruptGenerationAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            RhinoApp.WriteLine($"Glimpse AI: Error interrupting server generation: {ex.Message}");
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error cancelling generation: {ex.Message}");
+            }
+            
+            try
+            {
+                ctsToDispose.Dispose();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error disposing cancellation token: {ex.Message}");
+            }
+        }
     }
 
     public void Dispose()
@@ -363,11 +462,56 @@ public class GlimpseOrchestrator : IDisposable
         if (!_disposed)
         {
             _disposed = true;
-            CancelCurrentGeneration();
-            _watcher?.Dispose();
-            _overlayConduit?.Dispose();
-            try { _comfyClient.DisconnectWebSocketAsync().GetAwaiter().GetResult(); } catch { }
-            _comfyClient?.Dispose();
+            
+            try
+            {
+                // Cancel any running generation first
+                CancelCurrentGeneration();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error cancelling generation during dispose: {ex.Message}");
+            }
+            
+            try
+            {
+                // Stop viewport watcher
+                _watcher?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error disposing viewport watcher: {ex.Message}");
+            }
+            
+            try
+            {
+                // Dispose overlay conduit
+                _overlayConduit?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error disposing overlay conduit: {ex.Message}");
+            }
+            
+            try
+            {
+                // Disconnect WebSocket gracefully
+                _comfyClient?.DisconnectWebSocketAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error disconnecting WebSocket: {ex.Message}");
+            }
+            
+            try
+            {
+                // Dispose ComfyUI client
+                _comfyClient?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Error disposing ComfyUI client: {ex.Message}");
+            }
         }
     }
 }

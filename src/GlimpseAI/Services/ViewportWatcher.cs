@@ -91,62 +91,128 @@ public class ViewportWatcher : IDisposable
     /// </summary>
     public void Stop()
     {
-        _isEnabled = false;
-        RhinoView.Modified -= OnViewModified;
-        _debounceTimer?.Dispose();
-        _debounceTimer = null;
+        Timer timerToDispose = null;
+        
+        lock (this)
+        {
+            _isEnabled = false;
+            timerToDispose = _debounceTimer;
+            _debounceTimer = null;
+        }
+        
+        // Unregister event handler
+        try
+        {
+            RhinoView.Modified -= OnViewModified;
+        }
+        catch (Exception ex)
+        {
+            Rhino.RhinoApp.WriteLine($"Glimpse AI: Error unregistering view modified handler: {ex.Message}");
+        }
+        
+        // Dispose timer outside lock
+        timerToDispose?.Dispose();
     }
 
     /// <summary>
     /// Resets the last known camera state so the next change always fires.
+    /// Thread-safe operation.
     /// </summary>
     public void Reset()
     {
-        _lastCameraPosition = Rhino.Geometry.Point3d.Unset;
-        _lastCameraTarget = Rhino.Geometry.Point3d.Unset;
+        lock (this)
+        {
+            _lastCameraPosition = Rhino.Geometry.Point3d.Unset;
+            _lastCameraTarget = Rhino.Geometry.Point3d.Unset;
+        }
     }
 
     private void OnViewModified(object sender, ViewEventArgs e)
     {
         if (!_isEnabled || _disposed) return;
 
-        var viewport = e.View?.ActiveViewport;
-        if (viewport == null) return;
+        try
+        {
+            var viewport = e.View?.ActiveViewport;
+            if (viewport == null) return;
 
-        var cameraPos = viewport.CameraLocation;
-        var cameraTarget = viewport.CameraTarget;
+            var cameraPos = viewport.CameraLocation;
+            var cameraTarget = viewport.CameraTarget;
 
-        // Check if the camera actually moved
-        if (!CameraHasChanged(cameraPos, cameraTarget))
-            return;
+            // Check if the camera actually moved (thread-safe)
+            bool hasChanged;
+            lock (this)
+            {
+                hasChanged = CameraHasChanged(cameraPos, cameraTarget);
+            }
+            
+            if (!hasChanged) return;
 
-        // Store pending state for debounce callback
-        var viewportName = viewport.Name;
+            // Store pending state for debounce callback
+            var viewportName = viewport.Name ?? "Unknown";
 
-        // Reset debounce timer — only fire after user stops moving
-        _debounceTimer?.Dispose();
-        _debounceTimer = new Timer(
-            _ => OnDebounceElapsed(viewportName, cameraPos, cameraTarget),
-            null,
-            _debounceMs,
-            Timeout.Infinite);
+            // Thread-safe timer reset
+            Timer oldTimer = null;
+            lock (this)
+            {
+                if (_disposed) return;
+                
+                oldTimer = _debounceTimer;
+                _debounceTimer = new Timer(
+                    _ => OnDebounceElapsed(viewportName, cameraPos, cameraTarget),
+                    null,
+                    _debounceMs,
+                    Timeout.Infinite);
+            }
+            
+            // Dispose old timer outside lock to prevent potential deadlock
+            oldTimer?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Rhino.RhinoApp.WriteLine($"Glimpse AI: View modified event error: {ex.Message}");
+        }
     }
 
     private void OnDebounceElapsed(string viewportName, Rhino.Geometry.Point3d cameraPos, Rhino.Geometry.Point3d cameraTarget)
     {
         if (!_isEnabled || _disposed) return;
 
-        // Update last known state
-        _lastCameraPosition = cameraPos;
-        _lastCameraTarget = cameraTarget;
-
-        // Fire event
-        ViewportChanged?.Invoke(this, new ViewportChangedEventArgs
+        try
         {
-            ViewportName = viewportName,
-            CameraPosition = cameraPos,
-            CameraTarget = cameraTarget
-        });
+            // Update last known state (thread-safe)
+            lock (this)
+            {
+                _lastCameraPosition = cameraPos;
+                _lastCameraTarget = cameraTarget;
+            }
+
+            // Marshal event invocation to UI thread to prevent cross-thread operations
+            // ViewportChanged handlers may need to access UI controls
+            Rhino.RhinoApp.InvokeOnUiThread(new Action(() =>
+            {
+                try
+                {
+                    // Double-check state in case watcher was disposed while marshalling
+                    if (!_isEnabled || _disposed) return;
+
+                    ViewportChanged?.Invoke(this, new ViewportChangedEventArgs
+                    {
+                        ViewportName = viewportName,
+                        CameraPosition = cameraPos,
+                        CameraTarget = cameraTarget
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Rhino.RhinoApp.WriteLine($"Glimpse AI: Viewport changed event error: {ex.Message}");
+                }
+            }));
+        }
+        catch (Exception ex)
+        {
+            Rhino.RhinoApp.WriteLine($"Glimpse AI: Debounce timer error: {ex.Message}");
+        }
     }
 
     private bool CameraHasChanged(Rhino.Geometry.Point3d newPos, Rhino.Geometry.Point3d newTarget)
@@ -162,9 +228,15 @@ public class ViewportWatcher : IDisposable
 
     public void Dispose()
     {
-        if (!_disposed)
+        bool wasDisposed;
+        lock (this)
         {
+            wasDisposed = _disposed;
             _disposed = true;
+        }
+        
+        if (!wasDisposed)
+        {
             Stop();
         }
     }
