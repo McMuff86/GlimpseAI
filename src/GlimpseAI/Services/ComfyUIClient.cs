@@ -837,6 +837,140 @@ public class ComfyUIClient : IDisposable
 
     #endregion
 
+    #region Florence2 Vision Support
+
+    /// <summary>
+    /// Checks if Florence2 node is available in ComfyUI.
+    /// </summary>
+    public async Task<bool> IsFlorence2AvailableAsync()
+    {
+        try
+        {
+            var response = await _client.GetAsync("/object_info/Florence2Run");
+            return response.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Runs Florence2 caption on an uploaded image.
+    /// Queues a minimal workflow: LoadImage → Florence2Run → outputs caption text.
+    /// </summary>
+    /// <param name="uploadedImageName">Name of previously uploaded image.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Generated caption or null if failed.</returns>
+    public async Task<string> GetFlorence2CaptionAsync(string uploadedImageName, CancellationToken ct)
+    {
+        var workflow = new Dictionary<string, object>
+        {
+            ["1"] = new Dictionary<string, object>
+            {
+                ["class_type"] = "LoadImage",
+                ["inputs"] = new Dictionary<string, object> { ["image"] = uploadedImageName }
+            },
+            ["2"] = new Dictionary<string, object>
+            {
+                ["class_type"] = "DownloadAndLoadFlorence2Model",
+                ["inputs"] = new Dictionary<string, object>
+                {
+                    ["model"] = "microsoft/Florence-2-base",
+                    ["precision"] = "fp16",
+                    ["attention"] = "sdpa"
+                }
+            },
+            ["3"] = new Dictionary<string, object>
+            {
+                ["class_type"] = "Florence2Run",
+                ["inputs"] = new Dictionary<string, object>
+                {
+                    ["text"] = "",
+                    ["task"] = "detailed_caption",
+                    ["fill_mask"] = true,
+                    ["keep_model_loaded"] = true,
+                    ["max_new_tokens"] = 256,
+                    ["num_beams"] = 3,
+                    ["do_sample"] = false,
+                    ["image"] = new object[] { "1", 0 },
+                    ["florence2_model"] = new object[] { "2", 0 }
+                }
+            },
+            // Dummy SaveImage node to ensure workflow executes properly
+            ["4"] = new Dictionary<string, object>
+            {
+                ["class_type"] = "SaveImage",
+                ["inputs"] = new Dictionary<string, object>
+                {
+                    ["filename_prefix"] = "GlimpseAI/vision_dummy",
+                    ["images"] = new object[] { "1", 0 }
+                }
+            }
+        };
+
+        try
+        {
+            // Queue the Florence2 workflow
+            var promptId = await QueuePromptAsync(workflow);
+
+            // Wait for completion using WebSocket or polling
+            var deadline = DateTime.UtcNow.Add(TimeSpan.FromMinutes(2)); // Florence2 timeout
+            
+            while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    // Check history for completion and text output
+                    var response = await _client.GetAsync($"/history/{promptId}", ct);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var json = await response.Content.ReadAsStringAsync(ct);
+                        var root = JsonNode.Parse(json);
+
+                        if (root is JsonObject obj && obj.ContainsKey(promptId))
+                        {
+                            var outputs = root[promptId]?["outputs"];
+                            if (outputs is JsonObject outputNodes && outputNodes.ContainsKey("3"))
+                            {
+                                // Florence2Run outputs text in the "text" field
+                                var textOutput = outputs["3"]?["text"];
+                                if (textOutput is JsonArray textArray && textArray.Count > 0)
+                                {
+                                    var caption = textArray[0]?.GetValue<string>();
+                                    if (!string.IsNullOrEmpty(caption))
+                                    {
+                                        Rhino.RhinoApp.WriteLine($"Glimpse AI: Florence2 caption: {caption}");
+                                        return caption;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Rhino.RhinoApp.WriteLine($"Glimpse AI: Error checking Florence2 history: {ex.Message}");
+                }
+
+                await Task.Delay(200, ct); // Poll every 200ms
+            }
+
+            if (ct.IsCancellationRequested)
+            {
+                await InterruptGenerationAsync(); // Best effort interrupt
+                return null;
+            }
+
+            Rhino.RhinoApp.WriteLine("Glimpse AI: Florence2 caption generation timed out");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Rhino.RhinoApp.WriteLine($"Glimpse AI: Florence2 caption failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    #endregion
+
     public void Dispose()
     {
         if (!_disposed)

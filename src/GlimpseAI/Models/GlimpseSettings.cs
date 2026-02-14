@@ -46,6 +46,15 @@ public class GlimpseSettings
     /// <summary>Whether to use depth preprocessor node instead of raw viewport image.</summary>
     public bool UseDepthPreprocessor { get; set; } = false;
 
+    /// <summary>Prompt mode for auto-prompt feature.</summary>
+    public PromptMode PromptMode { get; set; } = PromptMode.Manual;
+
+    /// <summary>Style preset for auto-prompt generation.</summary>
+    public StylePreset StylePreset { get; set; } = StylePreset.Architecture;
+
+    /// <summary>Custom style suffix when StylePreset is Custom.</summary>
+    public string CustomStyleSuffix { get; set; } = "";
+
     /// <summary>Serialize to JSON string.</summary>
     public string ToJson()
     {
