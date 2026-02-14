@@ -441,27 +441,27 @@ public class GlimpseOrchestrator : IDisposable
             {
                 var doc = RhinoDoc.ActiveDoc;
                 var resolution = "Unknown";
+                var logSettings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
                 if (doc?.Views.ActiveView?.ActiveViewport != null)
                 {
-                    var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
                     var res = ViewportCapture.GetResolutionForPreset(preset);
                     resolution = $"{res.width}x{res.height}";
                 }
 
                 if (_useFlux)
                 {
-                    RhinoApp.WriteLine($"Glimpse AI: Flux UNet: {settings.FluxUNetModel ?? "Unknown"}");
-                    if (preset != PresetType.Fast && !string.IsNullOrEmpty(settings.FluxControlNetModel))
+                    RhinoApp.WriteLine($"Glimpse AI: Flux UNet: {logSettings.FluxUNetModel ?? "Unknown"}");
+                    if (preset != PresetType.Fast && !string.IsNullOrEmpty(logSettings.FluxControlNetModel))
                     {
-                        RhinoApp.WriteLine($"Glimpse AI: Flux ControlNet: {settings.FluxControlNetModel} (strength: {settings.ControlNetStrength:F1})");
+                        RhinoApp.WriteLine($"Glimpse AI: Flux ControlNet: {logSettings.FluxControlNetModel} (strength: {logSettings.ControlNetStrength:F1})");
                     }
                 }
                 else
                 {
                     RhinoApp.WriteLine($"Glimpse AI: Model: {result.CheckpointName ?? "Unknown"}");
-                    if (settings.UseControlNet && preset != PresetType.Fast)
+                    if (logSettings.UseControlNet && preset != PresetType.Fast)
                     {
-                        RhinoApp.WriteLine($"Glimpse AI: ControlNet: {settings.ControlNetModel ?? "Auto"} (strength: {settings.ControlNetStrength:F1})");
+                        RhinoApp.WriteLine($"Glimpse AI: ControlNet: {logSettings.ControlNetModel ?? "Auto"} (strength: {logSettings.ControlNetStrength:F1})");
                     }
                 }
                 var pipelineType = _useFlux ? "Flux" : "SDXL";
