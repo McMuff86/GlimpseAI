@@ -23,6 +23,7 @@ public class GlimpseOrchestrator : IDisposable
     private string _autoPrompt;
     private PresetType _autoPreset;
     private double _autoDenoise;
+    private double _autoCfgScale;
     private int _autoSeed;
 
     /// <summary>Raised when a render completes (success or failure).</summary>
@@ -89,7 +90,7 @@ public class GlimpseOrchestrator : IDisposable
     /// Captures the viewport immediately, then runs generation on a background thread.
     /// Supports auto-prompt generation based on the current settings.
     /// </summary>
-    public void RequestGenerate(string prompt, PresetType preset, double denoise, int seed = -1)
+    public void RequestGenerate(string prompt, PresetType preset, double denoise, double cfgScale, int seed = -1)
     {
         // Capture viewport on the current UI thread
         var capture = CaptureCurrentViewport(preset);
@@ -106,7 +107,7 @@ public class GlimpseOrchestrator : IDisposable
 
         Task.Run(() => GenerateFromCaptureAsync(
             capture.viewportImage, capture.depthImage,
-            prompt, preset, denoise, seed, ct));
+            prompt, preset, denoise, cfgScale, seed, ct));
     }
 
     /// <summary>
@@ -196,11 +197,12 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>
     /// Starts auto-mode: the ViewportWatcher listens for camera changes and triggers generation.
     /// </summary>
-    public void StartAutoMode(string prompt, PresetType preset, double denoise, int seed = -1)
+    public void StartAutoMode(string prompt, PresetType preset, double denoise, double cfgScale, int seed = -1)
     {
         _autoPrompt = prompt;
         _autoPreset = preset;
         _autoDenoise = denoise;
+        _autoCfgScale = cfgScale;
         _autoSeed = seed;
         _watcher.Reset();
         _watcher.IsEnabled = true;
@@ -221,11 +223,12 @@ public class GlimpseOrchestrator : IDisposable
     /// <summary>
     /// Updates the generation settings used in auto-mode without restarting the watcher.
     /// </summary>
-    public void UpdateAutoSettings(string prompt, PresetType preset, double denoise, int seed = -1)
+    public void UpdateAutoSettings(string prompt, PresetType preset, double denoise, double cfgScale, int seed = -1)
     {
         _autoPrompt = prompt;
         _autoPreset = preset;
         _autoDenoise = denoise;
+        _autoCfgScale = cfgScale;
         _autoSeed = seed;
     }
 
@@ -321,14 +324,17 @@ public class GlimpseOrchestrator : IDisposable
     /// </summary>
     private async Task GenerateFromCaptureAsync(
         byte[] viewportImage, byte[] depthImage,
-        string prompt, PresetType preset, double denoise, int seed,
+        string prompt, PresetType preset, double denoise, double cfgScale, int seed,
         CancellationToken ct)
     {
         var startMemory = GC.GetTotalMemory(false);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         
         try
         {
             BusyChanged?.Invoke(this, true);
+            RhinoApp.WriteLine("Glimpse AI: Starting generation...");
+            RhinoApp.WriteLine($"Glimpse AI: Preset: {preset} | CFG: {cfgScale:F1} | Denoise: {denoise:F2}");
             StatusChanged?.Invoke(this, "Sending to ComfyUI…");
 
             // Ensure WebSocket is connected (reconnect if needed)
@@ -362,10 +368,38 @@ public class GlimpseOrchestrator : IDisposable
                 NegativePrompt = settings.DefaultNegativePrompt,
                 Preset = preset,
                 DenoiseStrength = denoise,
+                CfgScale = cfgScale,
                 Seed = seed
             };
 
             var result = await _comfyClient.GenerateAsync(request, ct);
+            stopwatch.Stop();
+
+            // Detailed logging
+            if (result.Success)
+            {
+                var doc = RhinoDoc.ActiveDoc;
+                var resolution = "Unknown";
+                if (doc?.Views.ActiveView?.ActiveViewport != null)
+                {
+                    var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+                    var res = ViewportCapture.GetResolutionForPreset(preset);
+                    resolution = $"{res.width}x{res.height}";
+                }
+
+                RhinoApp.WriteLine($"Glimpse AI: Model: {result.CheckpointName ?? "Unknown"}");
+                if (settings.UseControlNet && preset != PresetType.Fast)
+                {
+                    RhinoApp.WriteLine($"Glimpse AI: ControlNet: {settings.ControlNetModel ?? "Auto"} (strength: {settings.ControlNetStrength:F1})");
+                }
+                RhinoApp.WriteLine($"Glimpse AI: Resolution: {resolution} | Steps: {GetStepsForPreset(preset)}");
+                RhinoApp.WriteLine($"Glimpse AI: Generation complete in {stopwatch.Elapsed.TotalSeconds:F1}s");
+                RhinoApp.WriteLine($"Glimpse AI: Memory: {GC.GetTotalMemory(false) / 1024 / 1024}MB managed | Model: {result.CheckpointName ?? "Unknown"} | Preset: {preset}");
+            }
+            else
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Generation failed in {stopwatch.Elapsed.TotalSeconds:F1}s");
+            }
 
             // Update the overlay conduit with the final image
             if (result.Success && result.ImageData != null)
@@ -389,12 +423,23 @@ public class GlimpseOrchestrator : IDisposable
         {
             BusyChanged?.Invoke(this, false);
             
+            // Memory management
+            var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
+            
+            // Force garbage collection after large operations
+            GC.Collect(2, GCCollectionMode.Optimized, false);
+            
+            if (settings.AggressiveMemoryCleanup)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                GC.WaitForPendingFinalizers();
+            }
+            
             // Memory usage tracking for leak detection
             var endMemory = GC.GetTotalMemory(false);
             var memoryIncrease = endMemory - startMemory;
             if (memoryIncrease > 10 * 1024 * 1024) // > 10 MB increase
             {
-                GC.Collect(); // Force collection to release temporary objects
                 var afterGcMemory = GC.GetTotalMemory(true);
                 var actualIncrease = afterGcMemory - startMemory;
                 
@@ -404,6 +449,21 @@ public class GlimpseOrchestrator : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Gets the number of steps for a given preset (for logging purposes).
+    /// </summary>
+    private static int GetStepsForPreset(PresetType preset)
+    {
+        return preset switch
+        {
+            PresetType.Fast => 8,
+            PresetType.Balanced => 20,
+            PresetType.HighQuality => 30,
+            PresetType.Export4K => 30,
+            _ => 20
+        };
     }
 
     /// <summary>
@@ -478,7 +538,7 @@ public class GlimpseOrchestrator : IDisposable
 
                     await GenerateFromCaptureAsync(
                         viewportImage, depthImage,
-                        _autoPrompt, _autoPreset, _autoDenoise, _autoSeed, ct);
+                        _autoPrompt, _autoPreset, _autoDenoise, _autoCfgScale, _autoSeed, ct);
                 }
                 catch (OperationCanceledException)
                 {

@@ -39,4 +39,9 @@ public class RenderRequest
     /// Random seed for reproducible generation. -1 for random.
     /// </summary>
     public int Seed { get; set; } = -1;
+
+    /// <summary>
+    /// CFG Scale for prompt guidance (1.0-20.0).
+    /// </summary>
+    public double CfgScale { get; set; } = 7.0;
 }

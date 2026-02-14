@@ -135,11 +135,16 @@ public class ComfyUIClient : IDisposable
     /// Finds the best available ControlNet model for depth control.
     /// Returns null if no suitable ControlNet model is found.
     /// </summary>
-    public async Task<string> GetBestDepthControlNetAsync()
+    public async Task<string> GetBestDepthControlNetAsync(string checkpointName = null)
     {
         var available = await GetAvailableControlNetsAsync();
         if (available.Count == 0)
             return null;
+
+        // Check if the checkpoint is SDXL
+        bool isSDXL = !string.IsNullOrEmpty(checkpointName) && 
+                      (checkpointName.Contains("xl", StringComparison.OrdinalIgnoreCase) ||
+                       checkpointName.Contains("sdxl", StringComparison.OrdinalIgnoreCase));
 
         // Preferred depth ControlNet models in order of preference
         var preferred = new[]
@@ -157,11 +162,42 @@ public class ComfyUIClient : IDisposable
                 a.Contains(pref, StringComparison.OrdinalIgnoreCase) ||
                 a.Contains("depth", StringComparison.OrdinalIgnoreCase));
             if (match != null)
+            {
+                // Check for potential ControlNet/Checkpoint mismatch
+                bool controlNetIsSDXL = match.Contains("xl", StringComparison.OrdinalIgnoreCase) ||
+                                        match.Contains("sdxl", StringComparison.OrdinalIgnoreCase);
+                
+                if (isSDXL && !controlNetIsSDXL)
+                {
+                    Rhino.RhinoApp.WriteLine($"Glimpse AI: WARNING - ControlNet model '{match}' may not be compatible with checkpoint '{checkpointName}'. For SDXL checkpoints, use an SDXL ControlNet.");
+                }
+                else if (!isSDXL && controlNetIsSDXL && !string.IsNullOrEmpty(checkpointName))
+                {
+                    Rhino.RhinoApp.WriteLine($"Glimpse AI: WARNING - ControlNet model '{match}' may not be compatible with checkpoint '{checkpointName}'. For SD 1.5 checkpoints, use an SD 1.5 ControlNet.");
+                }
+
                 return match;
+            }
         }
 
         // If no depth-specific model found, return the first available
-        return available.FirstOrDefault();
+        var firstMatch = available.FirstOrDefault();
+        if (firstMatch != null && !string.IsNullOrEmpty(checkpointName))
+        {
+            bool controlNetIsSDXL = firstMatch.Contains("xl", StringComparison.OrdinalIgnoreCase) ||
+                                    firstMatch.Contains("sdxl", StringComparison.OrdinalIgnoreCase);
+            
+            if (isSDXL && !controlNetIsSDXL)
+            {
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: WARNING - ControlNet model '{firstMatch}' may not be compatible with checkpoint '{checkpointName}'. For SDXL checkpoints, use an SDXL ControlNet.");
+            }
+            else if (!isSDXL && controlNetIsSDXL)
+            {
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: WARNING - ControlNet model '{firstMatch}' may not be compatible with checkpoint '{checkpointName}'. For SD 1.5 checkpoints, use an SD 1.5 ControlNet.");
+            }
+        }
+
+        return firstMatch;
     }
 
     /// <summary>
@@ -485,7 +521,7 @@ public class ComfyUIClient : IDisposable
                 }
                 else
                 {
-                    controlNetModel = await GetBestDepthControlNetAsync();
+                    controlNetModel = await GetBestDepthControlNetAsync(checkpointName);
                     if (controlNetModel == null)
                     {
                         Rhino.RhinoApp.WriteLine("Glimpse AI: No ControlNet models found - falling back to img2img for this generation");
@@ -510,6 +546,7 @@ public class ComfyUIClient : IDisposable
                 request.DenoiseStrength,
                 seed,
                 checkpointName,
+                request.CfgScale,
                 controlNetModel,
                 controlNetStrength: settings.ControlNetStrength,
                 useDepthPreprocessor: settings.UseDepthPreprocessor,
@@ -521,12 +558,12 @@ public class ComfyUIClient : IDisposable
             // 6. Wait for completion via WebSocket or HTTP polling
             if (IsWebSocketConnected)
             {
-                var result = await WaitForCompletionWebSocketAsync(promptId, request, seed, stopwatch, ct);
+                var result = await WaitForCompletionWebSocketAsync(promptId, request, seed, checkpointName, stopwatch, ct);
                 return result;
             }
             else
             {
-                return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                return await WaitForCompletionPollingAsync(promptId, request, seed, checkpointName, stopwatch, ct);
             }
         }
         catch (OperationCanceledException)
@@ -555,7 +592,7 @@ public class ComfyUIClient : IDisposable
     /// Uses dynamic buffer allocation to handle large preview images safely.
     /// </summary>
     private async Task<RenderResult> WaitForCompletionWebSocketAsync(
-        string promptId, RenderRequest request, int seed, Stopwatch stopwatch, CancellationToken ct)
+        string promptId, RenderRequest request, int seed, string checkpointName, Stopwatch stopwatch, CancellationToken ct)
     {
         const int InitialBufferSize = 4 * 1024 * 1024; // 4 MB initial buffer
         const int MaxBufferSize = 32 * 1024 * 1024;    // 32 MB max buffer
@@ -571,7 +608,7 @@ public class ComfyUIClient : IDisposable
             {
                 if (_ws == null || _ws.State != WebSocketState.Open)
                 {
-                    return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                    return await WaitForCompletionPollingAsync(promptId, request, seed, checkpointName, stopwatch, ct);
                 }
 
                 WebSocketReceiveResult wsResult;
@@ -645,7 +682,7 @@ public class ComfyUIClient : IDisposable
                         }
                     }
                     
-                    return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                    return await WaitForCompletionPollingAsync(promptId, request, seed, checkpointName, stopwatch, ct);
                 }
 
                 if (wsResult.MessageType == WebSocketMessageType.Text)
@@ -671,7 +708,7 @@ public class ComfyUIClient : IDisposable
 
                         var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
                         stopwatch.Stop();
-                        return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed);
+                        return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed, checkpointName);
                     }
                 }
                 else if (wsResult.MessageType == WebSocketMessageType.Binary)
@@ -694,7 +731,7 @@ public class ComfyUIClient : IDisposable
                 }
                 else if (wsResult.MessageType == WebSocketMessageType.Close)
                 {
-                    return await WaitForCompletionPollingAsync(promptId, request, seed, stopwatch, ct);
+                    return await WaitForCompletionPollingAsync(promptId, request, seed, checkpointName, stopwatch, ct);
                 }
             }
 
@@ -772,7 +809,7 @@ public class ComfyUIClient : IDisposable
     /// Fallback: HTTP polling for completion (used when WebSocket is unavailable).
     /// </summary>
     private async Task<RenderResult> WaitForCompletionPollingAsync(
-        string promptId, RenderRequest request, int seed, Stopwatch stopwatch, CancellationToken ct)
+        string promptId, RenderRequest request, int seed, string checkpointName, Stopwatch stopwatch, CancellationToken ct)
     {
         const int pollIntervalMs = 150;
         var deadline = DateTime.UtcNow + MaxWaitTime;
@@ -821,7 +858,7 @@ public class ComfyUIClient : IDisposable
 
                         var imageData = await DownloadImageAsync(imageInfo.Value.filename, imageInfo.Value.subfolder);
                         stopwatch.Stop();
-                        return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed);
+                        return RenderResult.Ok(imageData, imageInfo.Value.filename, stopwatch.Elapsed, request.Preset, seed, checkpointName);
                     }
                 }
             }

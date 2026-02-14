@@ -34,6 +34,8 @@ public class GlimpsePanel : Panel, IPanel
     private DropDown _presetDropDown;
     private Slider _denoiseSlider;
     private Label _denoiseValueLabel;
+    private Slider _cfgSlider;
+    private Label _cfgValueLabel;
     private TextBox _seedTextBox;
 
     // Overlay controls
@@ -49,6 +51,7 @@ public class GlimpsePanel : Panel, IPanel
     private Button _generateButton;
     private Button _autoToggleButton;
     private Button _saveButton;
+    private Button _settingsButton;
 
     // Status bar
     private Label _generationTimeLabel;
@@ -276,6 +279,23 @@ public class GlimpsePanel : Panel, IPanel
             Width = 32
         };
 
+        // CFG slider (10-200 mapped to 1.0-20.0)
+        int cfgSliderValue = (int)((settings.CfgScale - 1.0) / 19.0 * 190) + 10;
+        _cfgSlider = new Slider
+        {
+            MinValue = 10,
+            MaxValue = 200,
+            Value = Math.Clamp(cfgSliderValue, 10, 200),
+            Width = 100
+        };
+        _cfgSlider.ValueChanged += OnCfgChanged;
+
+        _cfgValueLabel = new Label
+        {
+            Text = settings.CfgScale.ToString("F1"),
+            Width = 32
+        };
+
         // Seed text box
         _seedTextBox = new TextBox
         {
@@ -295,6 +315,9 @@ public class GlimpsePanel : Panel, IPanel
                 new Label { Text = "Denoise:" },
                 _denoiseSlider,
                 _denoiseValueLabel,
+                new Label { Text = "CFG:" },
+                _cfgSlider,
+                _cfgValueLabel,
                 new Label { Text = "Seed:" },
                 _seedTextBox
             }
@@ -359,6 +382,9 @@ public class GlimpsePanel : Panel, IPanel
         _saveButton = new Button { Text = "Save", Enabled = false };
         _saveButton.Click += OnSaveClicked;
 
+        _settingsButton = new Button { Text = "⚙️", Width = 40 };
+        _settingsButton.Click += OnSettingsClicked;
+
         var layout = new StackLayout
         {
             Orientation = Orientation.Horizontal,
@@ -367,7 +393,8 @@ public class GlimpsePanel : Panel, IPanel
             {
                 new StackLayoutItem(_generateButton, expand: true),
                 new StackLayoutItem(_autoToggleButton, expand: true),
-                new StackLayoutItem(_saveButton, expand: true)
+                new StackLayoutItem(_saveButton, expand: true),
+                _settingsButton
             }
         };
 
@@ -462,7 +489,7 @@ public class GlimpsePanel : Panel, IPanel
                     _resolutionLabel.Text = $"{_currentPreviewBitmap.Width}x{_currentPreviewBitmap.Height}";
                 }
 
-                _modelNameLabel.Text = result.Preset.ToString();
+                _modelNameLabel.Text = result.CheckpointName ?? result.Preset.ToString();
             }
             else
             {
@@ -576,9 +603,10 @@ public class GlimpsePanel : Panel, IPanel
         var prompt = _promptTextArea.Text;
         var preset = (PresetType)_presetDropDown.SelectedIndex;
         var denoise = GetCurrentDenoise();
+        var cfg = GetCurrentCfg();
         var seed = ParseSeed(_seedTextBox.Text);
 
-        _orchestrator.RequestGenerate(prompt, preset, denoise, seed);
+        _orchestrator.RequestGenerate(prompt, preset, denoise, cfg, seed);
     }
 
     private void OnAutoToggleClicked(object sender, EventArgs e)
@@ -592,6 +620,7 @@ public class GlimpsePanel : Panel, IPanel
                 _promptTextArea.Text,
                 (PresetType)_presetDropDown.SelectedIndex,
                 GetCurrentDenoise(),
+                GetCurrentCfg(),
                 ParseSeed(_seedTextBox.Text));
         }
         else
@@ -663,6 +692,7 @@ public class GlimpsePanel : Panel, IPanel
                 _promptTextArea.Text,
                 preset,
                 GetCurrentDenoise(),
+                GetCurrentCfg(),
                 ParseSeed(_seedTextBox.Text));
         }
     }
@@ -682,8 +712,37 @@ public class GlimpsePanel : Panel, IPanel
                 _promptTextArea.Text,
                 (PresetType)_presetDropDown.SelectedIndex,
                 denoise,
+                GetCurrentCfg(),
                 ParseSeed(_seedTextBox.Text));
         }
+    }
+
+    private void OnCfgChanged(object sender, EventArgs e)
+    {
+        var cfg = GetCurrentCfg();
+        _cfgValueLabel.Text = cfg.ToString("F1");
+
+        var settings = GetSettings();
+        settings.CfgScale = cfg;
+        GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
+
+        if (_autoModeActive)
+        {
+            _orchestrator.UpdateAutoSettings(
+                _promptTextArea.Text,
+                (PresetType)_presetDropDown.SelectedIndex,
+                GetCurrentDenoise(),
+                cfg,
+                ParseSeed(_seedTextBox.Text));
+        }
+    }
+
+    private void OnSettingsClicked(object sender, EventArgs e)
+    {
+        var dialog = new GlimpseSettingsDialog();
+        dialog.ShowModal(RhinoEtoApp.MainWindow);
+        // Reload settings after dialog closes
+        ReloadSettings();
     }
 
     #endregion
@@ -763,6 +822,7 @@ public class GlimpsePanel : Panel, IPanel
                 _promptTextArea.Text,
                 (PresetType)_presetDropDown.SelectedIndex,
                 GetCurrentDenoise(),
+                GetCurrentCfg(),
                 ParseSeed(_seedTextBox.Text));
         }
     }
@@ -787,6 +847,7 @@ public class GlimpsePanel : Panel, IPanel
                 _promptTextArea.Text,
                 (PresetType)_presetDropDown.SelectedIndex,
                 GetCurrentDenoise(),
+                GetCurrentCfg(),
                 ParseSeed(_seedTextBox.Text));
         }
     }
@@ -843,6 +904,52 @@ public class GlimpsePanel : Panel, IPanel
     private double GetCurrentDenoise()
     {
         return 0.1 + (_denoiseSlider.Value / 100.0) * 0.9;
+    }
+
+    /// <summary>
+    /// Maps the CFG slider's 10-200 integer range to 1.0-20.0.
+    /// </summary>
+    private double GetCurrentCfg()
+    {
+        return 1.0 + ((_cfgSlider.Value - 10) / 190.0) * 19.0;
+    }
+
+    /// <summary>
+    /// Reloads settings from the plugin and updates UI controls.
+    /// </summary>
+    private void ReloadSettings()
+    {
+        var settings = GetSettings();
+        
+        // Update denoise slider
+        int denoiseSliderValue = (int)((settings.DenoiseStrength - 0.1) / 0.9 * 100);
+        _denoiseSlider.Value = Math.Clamp(denoiseSliderValue, 0, 100);
+        _denoiseValueLabel.Text = settings.DenoiseStrength.ToString("F2");
+
+        // Update CFG slider
+        int cfgSliderValue = (int)((settings.CfgScale - 1.0) / 19.0 * 190) + 10;
+        _cfgSlider.Value = Math.Clamp(cfgSliderValue, 10, 200);
+        _cfgValueLabel.Text = settings.CfgScale.ToString("F1");
+
+        // Update other controls
+        _presetDropDown.SelectedIndex = (int)settings.ActivePreset;
+        _promptModeDropDown.SelectedIndex = (int)settings.PromptMode;
+        _stylePresetDropDown.SelectedIndex = (int)settings.StylePreset;
+        
+        // Update visibility
+        _stylePresetDropDown.Visible = settings.PromptMode != PromptMode.Manual;
+        _stylePresetLabel.Visible = settings.PromptMode != PromptMode.Manual;
+        _promptTextArea.ReadOnly = settings.PromptMode != PromptMode.Manual;
+        
+        // Update prompt display
+        if (settings.PromptMode == PromptMode.Manual)
+        {
+            _promptTextArea.Text = settings.DefaultPrompt;
+        }
+        else
+        {
+            UpdateAutoPromptDisplay();
+        }
     }
 
     /// <summary>

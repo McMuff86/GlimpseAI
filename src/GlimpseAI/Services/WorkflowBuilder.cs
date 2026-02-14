@@ -30,6 +30,7 @@ public static class WorkflowBuilder
     /// <param name="denoise">Denoise strength (0.0–1.0).</param>
     /// <param name="seed">Random seed.</param>
     /// <param name="checkpointName">Checkpoint model filename (auto-detected).</param>
+    /// <param name="cfgScale">CFG Scale for prompt guidance (1.0–20.0).</param>
     /// <param name="controlNetModel">ControlNet model filename (for non-Fast presets), or null to disable ControlNet.</param>
     /// <param name="controlNetStrength">ControlNet strength (0.0–1.0).</param>
     /// <param name="useDepthPreprocessor">Whether to use depth preprocessor node instead of raw viewport image.</param>
@@ -44,6 +45,7 @@ public static class WorkflowBuilder
         double denoise,
         int seed,
         string checkpointName,
+        double cfgScale = 7.0,
         string controlNetModel = null,
         double controlNetStrength = 0.7,
         bool useDepthPreprocessor = false,
@@ -51,11 +53,11 @@ public static class WorkflowBuilder
     {
         return preset switch
         {
-            PresetType.Fast => BuildFastWorkflow(viewportImageName, prompt, negativePrompt, denoise, seed, checkpointName, useWebSocketOutput),
-            PresetType.Balanced => BuildBalancedWorkflow(viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName, controlNetModel, controlNetStrength, useDepthPreprocessor, useWebSocketOutput),
-            PresetType.HighQuality => BuildHQWorkflow(viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName, controlNetModel, controlNetStrength, useDepthPreprocessor, useWebSocketOutput),
-            PresetType.Export4K => BuildExport4KWorkflow(viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName, controlNetModel, controlNetStrength, useDepthPreprocessor, useWebSocketOutput),
-            _ => BuildFastWorkflow(viewportImageName, prompt, negativePrompt, denoise, seed, checkpointName, useWebSocketOutput)
+            PresetType.Fast => BuildFastWorkflow(viewportImageName, prompt, negativePrompt, denoise, seed, checkpointName, cfgScale, useWebSocketOutput),
+            PresetType.Balanced => BuildBalancedWorkflow(viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName, cfgScale, controlNetModel, controlNetStrength, useDepthPreprocessor, useWebSocketOutput),
+            PresetType.HighQuality => BuildHQWorkflow(viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName, cfgScale, controlNetModel, controlNetStrength, useDepthPreprocessor, useWebSocketOutput),
+            PresetType.Export4K => BuildExport4KWorkflow(viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName, cfgScale, controlNetModel, controlNetStrength, useDepthPreprocessor, useWebSocketOutput),
+            _ => BuildFastWorkflow(viewportImageName, prompt, negativePrompt, denoise, seed, checkpointName, cfgScale, useWebSocketOutput)
         };
     }
 
@@ -64,13 +66,13 @@ public static class WorkflowBuilder
     /// </summary>
     private static Dictionary<string, object> BuildFastWorkflow(
         string viewportImageName, string prompt, string negativePrompt,
-        double denoise, int seed, string checkpointName, bool useWebSocketOutput)
+        double denoise, int seed, string checkpointName, double cfgScale, bool useWebSocketOutput)
     {
-        // Fast preset keeps img2img for speed, but uses higher denoise and cfg
+        // Fast preset keeps img2img for speed, but uses higher denoise
         var actualDenoise = Math.Max(denoise, 0.8); // Ensure minimum 0.8 denoise
         return BuildImg2ImgWorkflow(
             viewportImageName, prompt, negativePrompt, actualDenoise, seed, checkpointName,
-            steps: 8, cfg: 5.0, samplerName: "dpmpp_sde", scheduler: "karras",
+            steps: 8, cfg: cfgScale, samplerName: "dpmpp_sde", scheduler: "karras",
             filenamePrefix: "GlimpseAI/fast", useWebSocketOutput: useWebSocketOutput);
     }
 
@@ -79,7 +81,7 @@ public static class WorkflowBuilder
     /// </summary>
     private static Dictionary<string, object> BuildBalancedWorkflow(
         string viewportImageName, string depthImageName, string prompt, string negativePrompt,
-        int seed, string checkpointName, string controlNetModel, double controlNetStrength,
+        int seed, string checkpointName, double cfgScale, string controlNetModel, double controlNetStrength,
         bool useDepthPreprocessor, bool useWebSocketOutput)
     {
         // If no ControlNet model available, fallback to img2img
@@ -87,14 +89,14 @@ public static class WorkflowBuilder
         {
             return BuildImg2ImgWorkflow(
                 viewportImageName, prompt, negativePrompt, denoise: 0.85, seed, checkpointName,
-                steps: 20, cfg: 7.0, samplerName: "dpmpp_2m", scheduler: "karras",
+                steps: 20, cfg: cfgScale, samplerName: "dpmpp_2m", scheduler: "karras",
                 filenamePrefix: "GlimpseAI/balanced", useWebSocketOutput: useWebSocketOutput);
         }
 
         return BuildControlNetWorkflow(
             viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName,
             controlNetModel, controlNetStrength, useDepthPreprocessor,
-            steps: 20, cfg: 7.0, samplerName: "dpmpp_2m", scheduler: "karras",
+            steps: 20, cfg: cfgScale, samplerName: "dpmpp_2m", scheduler: "karras",
             width: 1024, height: 768, filenamePrefix: "GlimpseAI/balanced", useWebSocketOutput: useWebSocketOutput);
     }
 
@@ -103,7 +105,7 @@ public static class WorkflowBuilder
     /// </summary>
     private static Dictionary<string, object> BuildHQWorkflow(
         string viewportImageName, string depthImageName, string prompt, string negativePrompt,
-        int seed, string checkpointName, string controlNetModel, double controlNetStrength,
+        int seed, string checkpointName, double cfgScale, string controlNetModel, double controlNetStrength,
         bool useDepthPreprocessor, bool useWebSocketOutput)
     {
         // If no ControlNet model available, fallback to img2img
@@ -111,14 +113,14 @@ public static class WorkflowBuilder
         {
             return BuildImg2ImgWorkflow(
                 viewportImageName, prompt, negativePrompt, denoise: 0.9, seed, checkpointName,
-                steps: 30, cfg: 7.5, samplerName: "dpmpp_2m", scheduler: "karras",
+                steps: 30, cfg: cfgScale, samplerName: "dpmpp_2m", scheduler: "karras",
                 filenamePrefix: "GlimpseAI/hq", useWebSocketOutput: useWebSocketOutput);
         }
 
         return BuildControlNetWorkflow(
             viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName,
             controlNetModel, controlNetStrength, useDepthPreprocessor,
-            steps: 30, cfg: 7.5, samplerName: "dpmpp_2m", scheduler: "karras",
+            steps: 30, cfg: cfgScale, samplerName: "dpmpp_2m", scheduler: "karras",
             width: 1024, height: 768, filenamePrefix: "GlimpseAI/hq", useWebSocketOutput: useWebSocketOutput);
     }
 
@@ -128,7 +130,7 @@ public static class WorkflowBuilder
     /// </summary>
     private static Dictionary<string, object> BuildExport4KWorkflow(
         string viewportImageName, string depthImageName, string prompt, string negativePrompt,
-        int seed, string checkpointName, string controlNetModel, double controlNetStrength,
+        int seed, string checkpointName, double cfgScale, string controlNetModel, double controlNetStrength,
         bool useDepthPreprocessor, bool useWebSocketOutput)
     {
         Dictionary<string, object> workflow;
@@ -138,7 +140,7 @@ public static class WorkflowBuilder
         {
             workflow = BuildImg2ImgWorkflow(
                 viewportImageName, prompt, negativePrompt, denoise: 0.9, seed, checkpointName,
-                steps: 30, cfg: 7.5, samplerName: "dpmpp_2m", scheduler: "karras",
+                steps: 30, cfg: cfgScale, samplerName: "dpmpp_2m", scheduler: "karras",
                 filenamePrefix: "GlimpseAI/export4k", useWebSocketOutput: false);
         }
         else
@@ -147,7 +149,7 @@ public static class WorkflowBuilder
             workflow = BuildControlNetWorkflow(
                 viewportImageName, depthImageName, prompt, negativePrompt, seed, checkpointName,
                 controlNetModel, controlNetStrength, useDepthPreprocessor,
-                steps: 30, cfg: 7.5, samplerName: "dpmpp_2m", scheduler: "karras",
+                steps: 30, cfg: cfgScale, samplerName: "dpmpp_2m", scheduler: "karras",
                 width: 1024, height: 768, filenamePrefix: "GlimpseAI/export4k", useWebSocketOutput: false);
         }
 

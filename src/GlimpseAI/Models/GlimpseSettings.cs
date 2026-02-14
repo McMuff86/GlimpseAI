@@ -22,6 +22,9 @@ public class GlimpseSettings
     /// <summary>Denoise strength (0.0–1.0).</summary>
     public double DenoiseStrength { get; set; } = 0.75;
 
+    /// <summary>CFG Scale for prompt guidance (1.0–20.0).</summary>
+    public double CfgScale { get; set; } = 7.0;
+
     /// <summary>Whether auto-generate on viewport change is enabled.</summary>
     public bool AutoGenerate { get; set; } = false;
 
@@ -54,6 +57,9 @@ public class GlimpseSettings
 
     /// <summary>Custom style suffix when StylePreset is Custom.</summary>
     public string CustomStyleSuffix { get; set; } = "";
+
+    /// <summary>Whether to use aggressive memory cleanup after generation.</summary>
+    public bool AggressiveMemoryCleanup { get; set; } = false;
 
     /// <summary>Serialize to JSON string.</summary>
     public string ToJson()

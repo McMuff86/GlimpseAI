@@ -28,8 +28,11 @@ public class RenderResult
     /// <summary>The seed that was actually used (resolved from -1 → random).</summary>
     public int Seed { get; set; }
 
+    /// <summary>The checkpoint model name used for this render.</summary>
+    public string CheckpointName { get; set; }
+
     /// <summary>Create a success result.</summary>
-    public static RenderResult Ok(byte[] imageData, string filename, TimeSpan elapsed, PresetType preset, int seed)
+    public static RenderResult Ok(byte[] imageData, string filename, TimeSpan elapsed, PresetType preset, int seed, string checkpointName = null)
     {
         return new RenderResult
         {
@@ -38,7 +41,8 @@ public class RenderResult
             OutputFilename = filename,
             Elapsed = elapsed,
             Preset = preset,
-            Seed = seed
+            Seed = seed,
+            CheckpointName = checkpointName
         };
     }
 
