@@ -179,6 +179,33 @@ public class ComfyUIClient : IDisposable
     }
 
     /// <summary>
+    /// Interrupts the currently running generation on the ComfyUI server.
+    /// This actually stops the server-side processing, not just client-side waiting.
+    /// </summary>
+    public async Task<bool> InterruptGenerationAsync()
+    {
+        try
+        {
+            var response = await _client.PostAsync("/interrupt", null);
+            if (response.IsSuccessStatusCode)
+            {
+                Rhino.RhinoApp.WriteLine("Glimpse AI: Server-side generation interrupted");
+                return true;
+            }
+            else
+            {
+                Rhino.RhinoApp.WriteLine($"Glimpse AI: Failed to interrupt generation: {response.StatusCode}");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Rhino.RhinoApp.WriteLine($"Glimpse AI: Error interrupting generation: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Downloads an output image from the ComfyUI server.
     /// </summary>
     public async Task<byte[]> DownloadImageAsync(string filename, string subfolder = "")
@@ -410,6 +437,16 @@ public class ComfyUIClient : IDisposable
         }
         catch (OperationCanceledException)
         {
+            // Attempt to interrupt server-side generation
+            try
+            {
+                _ = InterruptGenerationAsync(); // Fire and forget
+            }
+            catch
+            {
+                // Best effort interrupt, don't fail if it doesn't work
+            }
+            
             return RenderResult.Fail("Generation was cancelled.", stopwatch.Elapsed);
         }
         catch (Exception ex)

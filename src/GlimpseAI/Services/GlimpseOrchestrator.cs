@@ -395,7 +395,7 @@ public class GlimpseOrchestrator : IDisposable
     }
 
     /// <summary>
-    /// Cancels any in-flight generation request.
+    /// Cancels any in-flight generation request, including server-side interruption.
     /// </summary>
     private void CancelCurrentGeneration()
     {
@@ -409,6 +409,19 @@ public class GlimpseOrchestrator : IDisposable
                 if (!ctsToDispose.IsCancellationRequested)
                 {
                     ctsToDispose.Cancel();
+                    
+                    // Also interrupt server-side generation (fire and forget)
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _comfyClient.InterruptGenerationAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            RhinoApp.WriteLine($"Glimpse AI: Error interrupting server generation: {ex.Message}");
+                        }
+                    });
                 }
             }
             catch (Exception ex)
