@@ -389,7 +389,16 @@ public class GlimpseOrchestrator : IDisposable
         {
             BusyChanged?.Invoke(this, true);
             RhinoApp.WriteLine("Glimpse AI: Starting generation...");
-            RhinoApp.WriteLine($"Glimpse AI: Preset: {preset} | CFG: {cfgScale:F1} | Denoise: {denoise:F2}");
+            if (_useFlux)
+            {
+                var fluxCfg = preset == PresetType.Fast ? 1.5 : 3.5;
+                var fluxDenoise = preset == PresetType.Fast ? 0.70 : 1.0;
+                RhinoApp.WriteLine($"Glimpse AI: Preset: {preset} | Pipeline: Flux | CFG: {fluxCfg:F1} | Denoise: {fluxDenoise:F2}");
+            }
+            else
+            {
+                RhinoApp.WriteLine($"Glimpse AI: Preset: {preset} | Pipeline: SDXL | CFG: {cfgScale:F1} | Denoise: {denoise:F2}");
+            }
             StatusChanged?.Invoke(this, "Sending to ComfyUI…");
 
             // Ensure WebSocket is connected (reconnect if needed)

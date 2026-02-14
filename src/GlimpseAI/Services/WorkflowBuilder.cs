@@ -71,21 +71,34 @@ public static class WorkflowBuilder
                 throw new ArgumentException("Flux models (UNet, CLIP1, CLIP2, VAE) are required when useFlux=true");
             }
 
+            // Flux uses different CFG and denoise ranges than SDXL
+            // Override user values with Flux-appropriate defaults per preset
+            var fluxCfg = preset switch
+            {
+                PresetType.Fast => 1.5,
+                _ => 3.5
+            };
+            var fluxDenoise = preset switch
+            {
+                PresetType.Fast => 0.70,
+                _ => 1.0  // Full denoise for ControlNet presets
+            };
+
             return preset switch
             {
-                PresetType.Fast => BuildFluxImg2ImgWorkflow(viewportImageName, prompt, denoise, seed, 
-                    fluxUnetModel, fluxClip1, fluxClip2, fluxVae, cfgScale, useWebSocketOutput),
+                PresetType.Fast => BuildFluxImg2ImgWorkflow(viewportImageName, prompt, fluxDenoise, seed, 
+                    fluxUnetModel, fluxClip1, fluxClip2, fluxVae, fluxCfg, useWebSocketOutput),
                 PresetType.Balanced => BuildFluxControlNetWorkflow(viewportImageName, prompt, seed,
                     fluxUnetModel, fluxClip1, fluxClip2, fluxVae, controlNetModel, controlNetStrength,
-                    steps: 20, cfg: cfgScale, width: 1024, height: 768, filenamePrefix: "GlimpseAI/flux_balanced", useWebSocketOutput),
+                    steps: 20, cfg: fluxCfg, width: 1024, height: 768, filenamePrefix: "GlimpseAI/flux_balanced", useWebSocketOutput),
                 PresetType.HighQuality => BuildFluxControlNetWorkflow(viewportImageName, prompt, seed,
                     fluxUnetModel, fluxClip1, fluxClip2, fluxVae, controlNetModel, controlNetStrength,
-                    steps: 28, cfg: cfgScale, width: 1024, height: 768, filenamePrefix: "GlimpseAI/flux_hq", useWebSocketOutput),
+                    steps: 28, cfg: fluxCfg, width: 1024, height: 768, filenamePrefix: "GlimpseAI/flux_hq", useWebSocketOutput),
                 PresetType.Export4K => BuildFluxControlNetWorkflow(viewportImageName, prompt, seed,
                     fluxUnetModel, fluxClip1, fluxClip2, fluxVae, controlNetModel, controlNetStrength,
-                    steps: 28, cfg: cfgScale, width: 1024, height: 768, filenamePrefix: "GlimpseAI/flux_4k", useWebSocketOutput: false), // 4K never uses WebSocket
-                _ => BuildFluxImg2ImgWorkflow(viewportImageName, prompt, denoise, seed, 
-                    fluxUnetModel, fluxClip1, fluxClip2, fluxVae, cfgScale, useWebSocketOutput)
+                    steps: 28, cfg: fluxCfg, width: 1024, height: 768, filenamePrefix: "GlimpseAI/flux_4k", useWebSocketOutput: false),
+                _ => BuildFluxImg2ImgWorkflow(viewportImageName, prompt, fluxDenoise, seed, 
+                    fluxUnetModel, fluxClip1, fluxClip2, fluxVae, fluxCfg, useWebSocketOutput)
             };
         }
         else
