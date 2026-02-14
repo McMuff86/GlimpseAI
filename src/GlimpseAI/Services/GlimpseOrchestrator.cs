@@ -22,6 +22,15 @@ public class GlimpseOrchestrator : IDisposable
     private bool _useFlux;
     public bool IsUsingFlux => _useFlux;
 
+    /// <summary>Available checkpoint models (SDXL/SD1.5) from ComfyUI.</summary>
+    public System.Collections.Generic.List<string> AvailableCheckpoints { get; private set; } = new();
+
+    /// <summary>Available Flux UNet models from ComfyUI.</summary>
+    public System.Collections.Generic.List<string> AvailableFluxUnets { get; private set; } = new();
+
+    /// <summary>Raised when available model lists have been refreshed.</summary>
+    public event EventHandler ModelsRefreshed;
+
     // Auto-mode settings (updated from UI)
     private string _autoPrompt;
     private PresetType _autoPreset;
@@ -96,6 +105,12 @@ public class GlimpseOrchestrator : IDisposable
     {
         try
         {
+            // Fetch all available models
+            AvailableCheckpoints = await _comfyClient.GetAvailableCheckpointsAsync();
+            AvailableFluxUnets = await _comfyClient.GetAvailableFluxUNetsAsync();
+            RhinoApp.WriteLine($"Glimpse AI: Found {AvailableCheckpoints.Count} checkpoints, {AvailableFluxUnets.Count} Flux UNets");
+            ModelsRefreshed?.Invoke(this, EventArgs.Empty);
+
             _isFluxAvailable = await _comfyClient.IsFluxAvailableAsync();
             var settings = GlimpseAIPlugin.Instance?.GlimpseSettings ?? new GlimpseSettings();
             var preferred = settings.PreferredPipeline ?? "auto";
@@ -457,6 +472,18 @@ public class GlimpseOrchestrator : IDisposable
                 finalPrompt = await GenerateAutoPromptAsync(prompt, viewportImage);
                 StatusChanged?.Invoke(this, "Sending to ComfyUI…");
             }
+            // Determine selected model
+            string selectedCheckpoint = null;
+            string selectedFluxUnet = _useFlux ? settings.FluxUNetModel : null;
+            var selectedModel = settings.SelectedModel;
+            if (!string.IsNullOrEmpty(selectedModel) && selectedModel != "auto")
+            {
+                if (_useFlux)
+                    selectedFluxUnet = selectedModel;
+                else
+                    selectedCheckpoint = selectedModel;
+            }
+
             var request = new RenderRequest
             {
                 ViewportImage = viewportImage,
@@ -467,8 +494,9 @@ public class GlimpseOrchestrator : IDisposable
                 DenoiseStrength = denoise,
                 CfgScale = cfgScale,
                 Seed = seed,
+                CheckpointModel = selectedCheckpoint,
                 UseFlux = _useFlux,
-                FluxUnetModel = _useFlux ? settings.FluxUNetModel : null,
+                FluxUnetModel = _useFlux ? selectedFluxUnet : null,
                 FluxClip1 = _useFlux ? settings.FluxClipModel1 : null,
                 FluxClip2 = _useFlux ? settings.FluxClipModel2 : null,
                 FluxVae = _useFlux ? settings.FluxVaeModel : null,

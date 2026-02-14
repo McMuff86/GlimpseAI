@@ -531,8 +531,10 @@ public class ComfyUIClient : IDisposable
             }
             else
             {
-                // SDXL/SD1.5 pipeline - auto-detect checkpoint
-                checkpointName = await GetCheckpointForPresetAsync(request.Preset);
+                // SDXL/SD1.5 pipeline - use explicitly selected checkpoint or auto-detect
+                checkpointName = !string.IsNullOrEmpty(request.CheckpointModel)
+                    ? request.CheckpointModel
+                    : await GetCheckpointForPresetAsync(request.Preset);
                 if (checkpointName == null)
                 {
                     return RenderResult.Fail(

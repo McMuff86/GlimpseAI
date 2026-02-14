@@ -33,6 +33,7 @@ public class GlimpsePanel : Panel, IPanel
 
     // Controls row
     private DropDown _pipelineDropDown;
+    private DropDown _modelDropDown;
     private DropDown _presetDropDown;
     private Slider _denoiseSlider;
     private TextBox _denoiseValueBox;
@@ -292,6 +293,12 @@ public class GlimpsePanel : Panel, IPanel
         _pipelineDropDown.SelectedIndex = pipelineIndex;
         _pipelineDropDown.SelectedIndexChanged += OnPipelineChanged;
 
+        // Model dropdown
+        _modelDropDown = new DropDown();
+        _modelDropDown.Items.Add("Auto");
+        _modelDropDown.SelectedIndex = 0;
+        _modelDropDown.SelectedIndexChanged += OnModelChanged;
+
         // Denoise slider (0-100 mapped to 0.1-1.0)
         int sliderValue = (int)((settings.DenoiseStrength - 0.1) / 0.9 * 100);
         _denoiseSlider = new Slider
@@ -348,6 +355,8 @@ public class GlimpsePanel : Panel, IPanel
                 _presetDropDown,
                 new Label { Text = "Pipeline:" },
                 _pipelineDropDown,
+                new Label { Text = "Model:" },
+                _modelDropDown,
                 new Label { Text = "Denoise:" },
                 _denoiseSlider,
                 _denoiseValueBox,
@@ -507,6 +516,7 @@ public class GlimpsePanel : Panel, IPanel
         _orchestrator.BusyChanged += OnBusyChanged;
         _orchestrator.ProgressChanged += OnProgressChanged;
         _orchestrator.PreviewImageReceived += OnPreviewImageReceived;
+        _orchestrator.ModelsRefreshed += (s, e) => Application.Instance.Invoke(RefreshModelList);
     }
 
     /// <summary>
@@ -561,6 +571,7 @@ public class GlimpsePanel : Panel, IPanel
         {
             _generateButton.Enabled = !busy;
             _presetDropDown.Enabled = !busy;
+            _modelDropDown.Enabled = !busy;
             _denoiseSlider.Enabled = !busy;
             _denoiseValueBox.Enabled = !busy;
             _cfgSlider.Enabled = !busy;
@@ -765,7 +776,26 @@ public class GlimpsePanel : Panel, IPanel
         {
             RhinoApp.WriteLine($"Glimpse AI: Pipeline switch failed: {ex.Message}");
         }
+        RefreshModelList();
         UpdateRecommendedLabel();
+    }
+
+    private void OnModelChanged(object sender, EventArgs e)
+    {
+        if (_modelDropDown.SelectedIndex < 0) return;
+        var selectedText = _modelDropDown.SelectedIndex >= 0 ? _modelDropDown.Items[_modelDropDown.SelectedIndex].Text : "Auto";
+        var settings = GetSettings();
+        settings.SelectedModel = _modelDropDown.SelectedIndex == 0 ? "auto" : selectedText;
+        GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);
+
+        // Auto-adjust CFG/steps for Lightning/Turbo models
+        if (selectedText != null && IsLightningOrTurboModel(selectedText))
+        {
+            _cfgSlider.Value = 10; // maps to ~1.0
+            _cfgValueBox.Text = "1.0";
+            SaveCfgAndNotify(1.0);
+            RhinoApp.WriteLine($"Glimpse AI: Lightning/Turbo model detected - auto-set CFG to 1.0");
+        }
     }
 
     private void OnDenoiseSliderChanged(object sender, EventArgs e)
@@ -1014,6 +1044,61 @@ public class GlimpsePanel : Panel, IPanel
     #region Helpers
 
     /// <summary>
+    /// Refreshes the Model dropdown based on current pipeline selection and available models.
+    /// </summary>
+    private void RefreshModelList()
+    {
+        var settings = GetSettings();
+        var pipeline = _pipelineDropDown?.SelectedIndex switch
+        {
+            1 => "flux",
+            2 => "sdxl",
+            _ => "auto"
+        };
+
+        _modelDropDown.Items.Clear();
+        _modelDropDown.Items.Add("Auto");
+
+        if (_orchestrator != null)
+        {
+            if (pipeline == "flux" || pipeline == "auto")
+            {
+                foreach (var unet in _orchestrator.AvailableFluxUnets)
+                    _modelDropDown.Items.Add(unet);
+            }
+            if (pipeline == "sdxl" || pipeline == "auto")
+            {
+                foreach (var ckpt in _orchestrator.AvailableCheckpoints)
+                    _modelDropDown.Items.Add(ckpt);
+            }
+        }
+
+        // Restore selection
+        if (!string.IsNullOrEmpty(settings.SelectedModel) && settings.SelectedModel != "auto")
+        {
+            for (int i = 1; i < _modelDropDown.Items.Count; i++)
+            {
+                if (_modelDropDown.Items[i].Text == settings.SelectedModel)
+                {
+                    _modelDropDown.SelectedIndex = i;
+                    return;
+                }
+            }
+        }
+        _modelDropDown.SelectedIndex = 0;
+    }
+
+    /// <summary>
+    /// Returns true if model name indicates a Lightning/Turbo/LCM model (needs fewer steps, lower CFG).
+    /// </summary>
+    private static bool IsLightningOrTurboModel(string modelName)
+    {
+        return modelName.Contains("Lightning", StringComparison.OrdinalIgnoreCase) ||
+               modelName.Contains("turbo", StringComparison.OrdinalIgnoreCase) ||
+               modelName.Contains("lcm", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Maps the slider's 0-100 integer range to 0.10-1.00.
     /// </summary>
     private double GetCurrentDenoise()
@@ -1072,6 +1157,9 @@ public class GlimpsePanel : Panel, IPanel
         int cfgSliderValue = (int)((settings.CfgScale - 1.0) / 19.0 * 190) + 10;
         _cfgSlider.Value = Math.Clamp(cfgSliderValue, 10, 200);
         _cfgValueBox.Text = settings.CfgScale.ToString("F1");
+
+        // Refresh model list
+        RefreshModelList();
 
         // Update other controls
         _pipelineDropDown.SelectedIndex = settings.PreferredPipeline switch

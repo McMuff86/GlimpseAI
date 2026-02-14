@@ -64,6 +64,9 @@ public class GlimpseSettings
     /// <summary>Preferred pipeline: "auto", "flux", or "sdxl".</summary>
     public string PreferredPipeline { get; set; } = "auto";
 
+    /// <summary>Selected model name ("auto" = let pipeline decide, or specific model filename).</summary>
+    public string SelectedModel { get; set; } = "auto";
+
     /// <summary>Whether to prefer Flux models over SDXL when available.</summary>
     public bool PreferFlux { get; set; } = true;
 

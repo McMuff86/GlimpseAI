@@ -46,6 +46,11 @@ public class RenderRequest
     public double CfgScale { get; set; } = 7.0;
 
     /// <summary>
+    /// Explicitly selected checkpoint model (for SDXL/SD1.5), or null for auto-detect.
+    /// </summary>
+    public string CheckpointModel { get; set; }
+
+    /// <summary>
     /// Whether to use Flux pipeline instead of SDXL/SD1.5.
     /// </summary>
     public bool UseFlux { get; set; } = false;
