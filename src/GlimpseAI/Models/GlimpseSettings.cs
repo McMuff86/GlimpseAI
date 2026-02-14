@@ -34,6 +34,18 @@ public class GlimpseSettings
     /// <summary>Viewport capture height in pixels.</summary>
     public int CaptureHeight { get; set; } = 384;
 
+    /// <summary>Whether to use ControlNet for depth-guided generation (Fast preset always uses img2img).</summary>
+    public bool UseControlNet { get; set; } = true;
+
+    /// <summary>ControlNet strength (0.0–1.0) - how much the depth structure influences generation.</summary>
+    public double ControlNetStrength { get; set; } = 0.7;
+
+    /// <summary>Preferred ControlNet model name (auto-detected if empty).</summary>
+    public string ControlNetModel { get; set; } = "";
+
+    /// <summary>Whether to use depth preprocessor node instead of raw viewport image.</summary>
+    public bool UseDepthPreprocessor { get; set; } = false;
+
     /// <summary>Serialize to JSON string.</summary>
     public string ToJson()
     {

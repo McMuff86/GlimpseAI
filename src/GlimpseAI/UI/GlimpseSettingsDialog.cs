@@ -25,6 +25,12 @@ public class GlimpseSettingsDialog : Dialog
     private Button _testConnectionButton;
     private Label _connectionStatusLabel;
 
+    // --- ControlNet Settings ---
+    private CheckBox _useControlNetCheckBox;
+    private NumericStepper _controlNetStrengthStepper;
+    private TextBox _controlNetModelTextBox;
+    private CheckBox _useDepthPreprocessorCheckBox;
+
     public GlimpseSettingsDialog()
     {
         Title = "Glimpse AI Settings";
@@ -128,6 +134,28 @@ public class GlimpseSettingsDialog : Dialog
             }
         };
 
+        // --- ControlNet Settings ---
+        _useControlNetCheckBox = new CheckBox { Text = "Use ControlNet for depth-guided generation (Balanced/HQ/4K only)" };
+        
+        _controlNetStrengthStepper = new NumericStepper
+        {
+            MinValue = 0.0,
+            MaxValue = 1.0,
+            Increment = 0.05,
+            DecimalPlaces = 2,
+            Value = 0.7
+        };
+
+        _controlNetModelTextBox = new TextBox 
+        { 
+            PlaceholderText = "Auto-detect (leave empty for auto-detection)"
+        };
+
+        _useDepthPreprocessorCheckBox = new CheckBox 
+        { 
+            Text = "Use depth preprocessor (DepthAnything_V2)"
+        };
+
         // --- Buttons ---
         var okButton = new Button { Text = "OK" };
         okButton.Click += OnOkClicked;
@@ -170,6 +198,16 @@ public class GlimpseSettingsDialog : Dialog
 
         layout.AddSpace();
 
+        layout.AddRow(new Label { Text = "ControlNet (Advanced)", Font = SystemFonts.Bold() });
+        layout.AddRow(_useControlNetCheckBox);
+        layout.AddRow(new Label { Text = "ControlNet Strength:" });
+        layout.AddRow(_controlNetStrengthStepper);
+        layout.AddRow(new Label { Text = "ControlNet Model (optional):" });
+        layout.AddRow(_controlNetModelTextBox);
+        layout.AddRow(_useDepthPreprocessorCheckBox);
+
+        layout.AddSpace();
+
         layout.AddRow(new Label { Text = "Capture Resolution", Font = SystemFonts.Bold() });
         layout.AddRow(resolutionRow);
 
@@ -203,6 +241,12 @@ public class GlimpseSettingsDialog : Dialog
         _denoiseStepper.Value = settings.DenoiseStrength;
         _captureWidthStepper.Value = settings.CaptureWidth;
         _captureHeightStepper.Value = settings.CaptureHeight;
+        
+        // ControlNet settings
+        _useControlNetCheckBox.Checked = settings.UseControlNet;
+        _controlNetStrengthStepper.Value = settings.ControlNetStrength;
+        _controlNetModelTextBox.Text = settings.ControlNetModel ?? "";
+        _useDepthPreprocessorCheckBox.Checked = settings.UseDepthPreprocessor;
     }
 
     /// <summary>
@@ -260,7 +304,13 @@ public class GlimpseSettingsDialog : Dialog
             DefaultPrompt = _defaultPromptTextArea.Text,
             DenoiseStrength = _denoiseStepper.Value,
             CaptureWidth = (int)_captureWidthStepper.Value,
-            CaptureHeight = (int)_captureHeightStepper.Value
+            CaptureHeight = (int)_captureHeightStepper.Value,
+            
+            // ControlNet settings
+            UseControlNet = _useControlNetCheckBox.Checked ?? false,
+            ControlNetStrength = _controlNetStrengthStepper.Value,
+            ControlNetModel = string.IsNullOrWhiteSpace(_controlNetModelTextBox.Text) ? "" : _controlNetModelTextBox.Text,
+            UseDepthPreprocessor = _useDepthPreprocessorCheckBox.Checked ?? false
         };
 
         GlimpseAIPlugin.Instance?.UpdateGlimpseSettings(settings);

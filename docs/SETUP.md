@@ -90,6 +90,29 @@ ComfyUI/models/upscale_models/
 └── 4x-UltraSharp.pth
 ```
 
+### ControlNet Models (For Better Architectural Rendering)
+
+**NEW:** Glimpse AI now supports ControlNet Depth for enhanced architectural renderings! ControlNet uses your viewport structure as guidance while allowing high denoise for realistic AI-generated results.
+
+Place these in `ComfyUI/models/controlnet/`:
+
+| Model | Purpose | Download |
+|-------|---------|----------|
+| **ControlNet Depth SDXL** | Primary (Recommended) | [HuggingFace](https://huggingface.co/diffusers/controlnet-depth-sdxl-1.0) – Download `diffusion_pytorch_model.fp16.safetensors` |
+| **Control LoRA Depth** | Alternative (Less VRAM) | [HuggingFace](https://huggingface.co/stabilityai/control-lora) – Download `control-lora-depth-rank256.safetensors` |
+
+```
+ComfyUI/models/controlnet/
+├── controlnet-depth-sdxl-1.0.safetensors    ← Primary choice
+└── control-lora-depth-rank256.safetensors   ← Alternative (lower VRAM)
+```
+
+#### How ControlNet Improves Rendering
+
+- **Fast preset:** Still uses img2img (for speed)
+- **Balanced/HQ/4K presets:** Use ControlNet Depth + denoise 1.0
+- **Result:** Viewport structure preserved, but AI generates completely new realistic content
+
 > **💡 Tip:** You can start with just the DreamShaper XL Turbo model for the Fast preset. Add the others as needed.
 
 ---
@@ -251,6 +274,15 @@ Check the ComfyUI terminal window for error messages. Common issues:
 - `CUDA out of memory` → Reduce resolution or use `--lowvram`
 - `Connection refused` → ComfyUI not started with `--listen` flag
 
+### ControlNet Issues
+
+| Problem | Solution |
+|---------|----------|
+| "No ControlNet models found" in Rhino console | Install ControlNet models in `ComfyUI/models/controlnet/` (see setup above) |
+| Generation falls back to img2img | Normal behavior when ControlNet unavailable. To force ControlNet: disable "UseControlNet" in settings, then re-enable |
+| ControlNet results look wrong | Try adjusting ControlNet strength in GlimpseSettings (0.5-0.8 range) |
+| Out of VRAM with ControlNet | Use `control-lora-depth-rank256.safetensors` (smaller model) or disable ControlNet in settings |
+
 ---
 
 ## 📁 Folder Structure Reference
@@ -262,6 +294,9 @@ C:\ComfyUI\
 │   │   ├── dreamshaperXL_turboDPMSDE.safetensors       ← Fast preset
 │   │   ├── juggernautXL_v9Rdphoto2Lightning.safetensors ← Balanced preset
 │   │   └── dvarchMultiPrompt_dvarchExterior.safetensors  ← HQ / 4K preset
+│   ├── controlnet\
+│   │   ├── controlnet-depth-sdxl-1.0.safetensors       ← Depth ControlNet (primary)
+│   │   └── control-lora-depth-rank256.safetensors      ← Alternative (less VRAM)
 │   └── upscale_models\
 │       └── 4x-UltraSharp.pth                            ← 4K Export upscaler
 ├── input\                                                ← Viewport images uploaded here
