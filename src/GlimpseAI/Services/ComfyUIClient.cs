@@ -1270,7 +1270,7 @@ public class ComfyUIClient : IDisposable
                                 var outputPath = settings?.ComfyUIOutputPath;
                                 if (!string.IsNullOrEmpty(outputPath))
                                 {
-                                    var meshDir = System.IO.Path.Combine(outputPath, "3D");
+                                    var meshDir = System.IO.Path.Combine(outputPath, "GlimpseAI");
                                     if (System.IO.Directory.Exists(meshDir))
                                     {
                                         var newest = new System.IO.DirectoryInfo(meshDir)

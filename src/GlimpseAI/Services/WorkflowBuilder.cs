@@ -1051,7 +1051,7 @@ public static class WorkflowBuilder
         // === Stage 13a: Export untextured mesh ===
         workflow["17"] = MakeNode("Hy3DExportMesh", new Dictionary<string, object>
         {
-            ["filename_prefix"] = "3D/Hy3D",
+            ["filename_prefix"] = "GlimpseAI/Hy3D",
             ["file_format"] = "glb",
             ["save_file"] = true,
             ["trimesh"] = new object[] { "83", 0 }
@@ -1163,7 +1163,7 @@ public static class WorkflowBuilder
             // === Stage 13b: Export textured mesh ===
             workflow["99"] = MakeNode("Hy3DExportMesh", new Dictionary<string, object>
             {
-                ["filename_prefix"] = "3D/Hy3D_textured",
+                ["filename_prefix"] = "GlimpseAI/Hy3D_textured",
                 ["file_format"] = "glb",
                 ["save_file"] = true,
                 ["trimesh"] = new object[] { "98", 0 }
