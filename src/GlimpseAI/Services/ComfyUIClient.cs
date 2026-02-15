@@ -1248,26 +1248,53 @@ public class ComfyUIClient : IDisposable
 
                             if (completed)
                             {
-                                // Get the output mesh filename from history
-                                var meshInfo = await GetMeshOutputInfoAsync(promptId);
                                 stopwatch.Stop();
 
-                                if (meshInfo == null)
+                                // Try history API first
+                                var meshInfo = await GetMeshOutputInfoAsync(promptId);
+                                if (meshInfo != null)
                                 {
                                     return new MeshGenerationResult
                                     {
-                                        Success = false,
-                                        ErrorMessage = "Mesh generation completed but no output file found.",
+                                        Success = true,
+                                        TexturedGlbFilename = meshInfo.Value.texturedFilename,
+                                        UntexturedGlbFilename = meshInfo.Value.untexturedFilename,
+                                        Subfolder = meshInfo.Value.subfolder,
                                         Elapsed = stopwatch.Elapsed
                                     };
                                 }
 
+                                // Fallback: find the newest GLB in the output folder
+                                Rhino.RhinoApp.WriteLine("Glimpse AI: History API returned no mesh output, scanning output folder...");
+                                var settings = GlimpseAI.GlimpseAIPlugin.Instance?.GlimpseSettings;
+                                var outputPath = settings?.ComfyUIOutputPath;
+                                if (!string.IsNullOrEmpty(outputPath))
+                                {
+                                    var meshDir = System.IO.Path.Combine(outputPath, "3D");
+                                    if (System.IO.Directory.Exists(meshDir))
+                                    {
+                                        var newest = new System.IO.DirectoryInfo(meshDir)
+                                            .GetFiles("Hy3D_*.glb")
+                                            .OrderByDescending(f => f.LastWriteTime)
+                                            .FirstOrDefault();
+                                        if (newest != null && (DateTime.Now - newest.LastWriteTime).TotalMinutes < 5)
+                                        {
+                                            Rhino.RhinoApp.WriteLine($"Glimpse AI: Found mesh: {newest.Name}");
+                                            return new MeshGenerationResult
+                                            {
+                                                Success = true,
+                                                UntexturedGlbFilename = newest.Name,
+                                                Subfolder = "3D",
+                                                Elapsed = stopwatch.Elapsed
+                                            };
+                                        }
+                                    }
+                                }
+
                                 return new MeshGenerationResult
                                 {
-                                    Success = true,
-                                    TexturedGlbFilename = meshInfo.Value.texturedFilename,
-                                    UntexturedGlbFilename = meshInfo.Value.untexturedFilename,
-                                    Subfolder = meshInfo.Value.subfolder,
+                                    Success = false,
+                                    ErrorMessage = "Mesh generation completed but no output file found.",
                                     Elapsed = stopwatch.Elapsed
                                 };
                             }
