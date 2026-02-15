@@ -1204,7 +1204,7 @@ public class ComfyUIClient : IDisposable
             ct.ThrowIfCancellationRequested();
 
             // 2. Build Hunyuan3D workflow
-            var workflow = WorkflowBuilder.BuildHunyuan3DMeshWorkflow(filename, seed, textured: true);
+            var workflow = WorkflowBuilder.BuildHunyuan3DMeshWorkflow(filename, seed, textured: false);
 
             // 3. Queue prompt
             var promptId = await QueuePromptAsync(workflow);

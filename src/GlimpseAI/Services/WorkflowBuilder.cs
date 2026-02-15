@@ -925,15 +925,21 @@ public static class WorkflowBuilder
             ["cublas_ops"] = false
         });
 
-        workflow["28"] = MakeNode("DownloadAndLoadHy3DDelightModel", new Dictionary<string, object>
+        if (textured)
         {
-            ["model"] = "hunyuan3d-delight-v2-0"
-        });
+            workflow["28"] = MakeNode("DownloadAndLoadHy3DDelightModel", new Dictionary<string, object>
+            {
+                ["model"] = "hunyuan3d-delight-v2-0"
+            });
+        }
 
-        workflow["85"] = MakeNode("DownloadAndLoadHy3DPaintModel", new Dictionary<string, object>
+        if (textured)
         {
-            ["model"] = "hunyuan3d-paint-v2-0"
-        });
+            workflow["85"] = MakeNode("DownloadAndLoadHy3DPaintModel", new Dictionary<string, object>
+            {
+                ["model"] = "hunyuan3d-paint-v2-0"
+            });
+        }
 
         // === Stage 2: Preprocess Input Image ===
         workflow["50"] = MakeNode("LoadImage", new Dictionary<string, object>
@@ -975,17 +981,20 @@ public static class WorkflowBuilder
             ["alpha"] = new object[] { "202", 0 }
         });
 
-        // === Stage 3: Delight (remove lighting) ===
-        workflow["35"] = MakeNode("Hy3DDelightImage", new Dictionary<string, object>
+        // === Stage 3: Delight (remove lighting) - only needed for textured workflow ===
+        if (textured)
         {
-            ["steps"] = 50,
-            ["width"] = 512,
-            ["height"] = 512,
-            ["cfg_image"] = 1,
-            ["seed"] = 0,
-            ["delight_pipe"] = new object[] { "28", 0 },
-            ["image"] = new object[] { "195", 0 }
-        });
+            workflow["35"] = MakeNode("Hy3DDelightImage", new Dictionary<string, object>
+            {
+                ["steps"] = 50,
+                ["width"] = 512,
+                ["height"] = 512,
+                ["cfg_image"] = 1,
+                ["seed"] = 0,
+                ["delight_pipe"] = new object[] { "28", 0 },
+                ["image"] = new object[] { "195", 0 }
+            });
+        }
 
         // === Stage 4: Camera Config ===
         workflow["61"] = MakeNode("Hy3DCameraConfig", new Dictionary<string, object>
