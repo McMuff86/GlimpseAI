@@ -1,8 +1,8 @@
 name: glimpseai
-version: 0.1.0
+version: 0.2.0
 authors:
 - Adrian Muff
-description: "Real-time AI preview rendering for Rhino 8. Captures your viewport, sends it to a local ComfyUI server, and returns a photorealistic AI-rendered image in seconds."
+description: "AI-powered rendering and 3D generation for Rhino 8. Instant photorealistic previews via SDXL/Flux, monochrome model extraction via Flux Kontext, and image-to-3D mesh generation via Hunyuan3D — all powered by a local ComfyUI server."
 url: "https://github.com/McMuff86/GlimpseAI"
 icon: misc/icon.png
 keywords:
@@ -12,3 +12,7 @@ keywords:
 - comfyui
 - architecture
 - visualization
+- 3d-generation
+- hunyuan3d
+- flux
+- mesh
